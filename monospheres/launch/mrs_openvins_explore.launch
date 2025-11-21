@@ -1,0 +1,11 @@
+<launch>
+    <arg name="custom_config" default="" />
+
+    <!-- Load ROS parameters from the config file -->
+    <rosparam command="load" file="$(find monospheres)/config/mrs_sim.yaml"/>
+    <rosparam if="$(eval not arg('custom_config') == '')" file="$(arg custom_config)" />
+
+    <!-- Run ov_extension.py node -->
+    <node pkg="monospheres" type="ov_extension.py" name="ov_extension_node" output="screen"/>
+
+</launch>

@@ -1,0 +1,91 @@
+name: vio_simulation
+socket_name: mrs
+tmux_options: -f /etc/ctu-mrs/tmux.conf
+root: ./
+startup_window: navigation
+pre_window: export UAV_NAME=uav1; export RUN_TYPE=simulation; export UAV_TYPE=f330; export WORLD_NAME=simulation; export SENSORS="garmin_down"
+windows:
+  - roscore:
+      layout: tiled
+      panes:
+        - roscore
+  - rosbag:
+      layout: tiled
+      panes:
+        # - waitForOffboard; ./record_only_exploration.sh
+        - waitForOffboard; ../record_exploration_and_camera.sh
+  - gazebo:
+      layout: tiled
+      panes:
+        - waitForRos; export GAZEBO_MODEL_PATH=/home/user/workspace/src/; roslaunch mrs_uav_gazebo_simulation simulation.launch world_file:=`rospack find monospheres`/worlds/lushcave_morelights.sdf gui:=true
+        - waitForOdometry; gz camera -c gzclient_camera -f uav1; history -s gz camera -c gzclient_camera -f uav1
+
+  - hw_api:
+      layout: tiled
+      panes:
+        - waitForTime; roslaunch mrs_uav_px4_api api.launch
+  - status:
+      layout: tiled
+      panes:
+        - waitForGazebo; roslaunch mrs_uav_status status.launch
+  - navigation:
+      layout: tiled
+      panes:
+        - waitForOffboard; roslaunch monospheres random_octomap_explorer.launch custom_config:=./custom_configs/exploration_area_config.yaml
+  - mapplan:
+      layout: tiled
+      panes:
+        - waitForHw; roslaunch monospheres mapplan.launch
+          config_octomap_server:=./custom_configs/octomap_server.yaml
+          config_octomap_planner:=./custom_configs/octomap_planner.yaml
+  - octomap_pcl_retransform:
+      layout: tiled
+      panes:
+        - waitForHw; rosrun monospheres pointcloud_transformer.py
+  - start_maneuver:
+      layout: tiled
+      panes:
+        - waitForOffboard; sleep 22; rosrun monospheres goforward5m.sh
+  - VINS:
+      layout: tiled
+      panes:
+        -  waitForHw; roslaunch ov_repub simulation_bluefox2.launch
+  - VINS_republisher:
+      layout: tiled
+      panes:
+        -  waitForHw; roslaunch vins_republisher2 vins_republisher_openvins_bluefox.launch
+  - change_odom_source:
+      layout: tiled
+      panes:
+        -  waitForOffboard; sleep 40; rosservice call /$UAV_NAME/estimation_manager/change_estimator "open_vins"
+  - spawn:
+      layout: tiled
+      panes:
+        # - waitForGazebo; rosservice call /mrs_drone_spawner/spawn "1 $UAV_TYPE --enable-rangefinder --enable-vio --pos 0 2 3 1.57"
+        - waitForGazebo; rosservice call /mrs_drone_spawner/spawn "1 $UAV_TYPE --enable-rangefinder --enable-vio --pos -80 80 3 1.57"
+  - control:
+      layout: tiled
+      panes:
+        - waitForHw; roslaunch mrs_uav_core core.launch custom_config:=./custom_configs/custom_config.yaml world_config:=./custom_configs/world_config.yaml platform_config:=`rospack find mrs_uav_gazebo_simulation`/config/mrs_uav_system/$UAV_TYPE.yaml network_config:=./custom_configs/network_config.yaml
+  - takeoff:
+      layout: tiled
+      panes:
+        # - waitForGazebo; roslaunch mrs_uav_general automatic_start.launch
+        - waitForGazebo; roslaunch mrs_uav_autostart automatic_start.launch
+        - 'rosrun monospheres customWaitForControl.py;
+          sleep 2;
+          rosservice call /$UAV_NAME/mavros/cmd/arming 1;
+          sleep 2;
+          rosservice call /$UAV_NAME/mavros/set_mode 0 offboard'
+  - rviz:
+      layout: tiled
+      panes:
+        - rosrun monospheres customWaitForControl.py; roslaunch monospheres rviz.launch
+  - easy_control:
+      layout: tiled
+      panes:
+        - waitForControl; waitForControl; roslaunch mrs_rviz_plugins rviz_interface.launch
+  - layout:
+      layout: tiled
+      panes:
+        - waitForControl; sleep 3; ~/.i3/layout_manager.sh ./layout.json

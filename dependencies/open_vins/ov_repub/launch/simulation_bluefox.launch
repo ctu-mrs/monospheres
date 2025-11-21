@@ -1,0 +1,100 @@
+<launch>
+
+    <!-- mono or stereo and what ros bag to play -->
+    <arg name="max_cameras" default="1" />
+    <arg name="use_stereo"  default="false" />
+
+    <!-- imu starting thresholds -->
+    <arg name="init_window_time"  default="1" />
+    <arg name="init_imu_thresh"   default="0.05" />
+
+    <!-- MASTER NODE! -->
+    <node name="run_subscribe_msckf" pkg="ov_msckf" type="run_subscribe_msckf" output="screen"  required="true">
+<!--    <node name="run_subscribe_msckf" pkg="ov_msckf" type="run_subscribe_msckf" output="screen" clear_params="true" required="true" launch-prefix="gdb -ex run &#45;&#45;args">-->
+
+        <param name="topic_imu"      type="string" value="/uav1/vio/imu" />
+        <param name="topic_camera0"  type="string" value="/uav1/vio/camera/image_raw/" />
+        
+        <!-- world/filter parameters -->
+        <param name="use_aruco"              type="bool"   value="false" />
+        <param name="use_fej"                type="bool"   value="true" />
+        <param name="use_imuavg"             type="bool"   value="true" />
+        <param name="use_rk4int"             type="bool"   value="true" />
+        <param name="use_stereo"             type="bool"   value="$(arg use_stereo)" />
+        <param name="calib_cam_extrinsics"   type="bool"   value="false" />
+        <param name="calib_cam_intrinsics"   type="bool"   value="false" />
+        <param name="calib_cam_timeoffset"   type="bool"   value="true" />
+        <param name="calib_camimu_dt"        type="double" value="0" />
+        <param name="max_clones"             type="int"    value="15" />
+        <param name="max_slam"               type="int"    value="75" />
+        <param name="max_slam_in_update"     type="int"    value="25" />
+        <param name="max_msckf_in_update"    type="int"    value="40" />
+        <param name="max_cameras"            type="int"    value="$(arg max_cameras)" />
+        <param name="dt_slam_delay"          type="double" value="6" />
+        <param name="init_window_time"       type="double" value="$(arg init_window_time)" />
+        <param name="init_imu_thresh"        type="double" value="$(arg init_imu_thresh)" />
+        <rosparam param="gravity">[0.0,0,9.81007]</rosparam>
+        <param name="feat_rep_msckf"         type="string" value="GLOBAL_3D" />
+        <param name="feat_rep_slam"          type="string" value="ANCHORED_INVERSE_DEPTH_SINGLE" /> <!-- ANCHORED_MSCKF_INVERSE_DEPTH, ANCHORED_INVERSE_DEPTH_SINGLE -->
+
+        <!-- zero velocity update parameters -->
+        <param name="try_zupt"               type="bool"   value="false" />
+        <param name="zupt_chi2_multipler"    type="int"    value="2" />
+        <param name="zupt_max_velocity"      type="double" value="0.5" />
+        <param name="zupt_noise_multiplier"  type="double" value="50" />
+
+        <!-- timing statistics recording -->
+
+        <!-- tracker/extractor properties -->
+        <!-- min_dist: 30            # min distance between two features  -->
+        <!-- <param name="min_px_dist"        type="double" value="30" /> -->
+        <param name="use_klt"            type="bool"   value="true" />
+        <param name="num_pts"            type="int"    value="1200" />
+        <param name="fast_threshold"     type="int"    value="15" />
+        <param name="grid_x"             type="int"    value="5" />
+        <param name="grid_y"             type="int"    value="3" />
+        <param name="min_px_dist"        type="int"    value="10" />
+        <param name="knn_ratio"          type="double" value="0.7" />
+        <param name="refine_features"    type="bool"   value="true" />
+        <param name="downsample_cameras" type="bool"   value="false" />
+        <param name="multi_threading"    type="bool"   value="true" />
+
+        <!-- sensor noise values / update -->
+        <param name="up_msckf_sigma_px"            type="double"   value="1" />
+        <param name="up_msckf_chi2_multipler"      type="double"   value="1" />
+        <param name="up_slam_sigma_px"             type="double"   value="1" />
+        <param name="up_slam_chi2_multipler"       type="double"   value="1" />
+<!--        <param name="gyroscope_noise_density"      type="double"   value="0.05" />-->
+<!--        <param name="gyroscope_random_walk"        type="double"   value="4.0e-05" />-->
+<!--        <param name="accelerometer_noise_density"  type="double"   value="0.10" />-->
+<!--        <param name="accelerometer_random_walk"    type="double"   value="0.002" />-->
+        <param name="gyroscope_noise_density"      type="double"   value="0.3" />
+        <param name="gyroscope_random_walk"        type="double"   value="0.001" />
+        <param name="accelerometer_noise_density"  type="double"   value="0.1" />
+        <param name="accelerometer_random_walk"    type="double"   value="0.001" />
+
+        <!-- camera intrinsics -->
+        <rosparam param="cam0_wh">[752, 480]</rosparam>
+        <param name="cam0_is_fisheye" type="bool" value="true" />
+
+        <rosparam param="cam0_k">[227.4010064226358,227.35879407313246,375.5302935901654,239.4881944649193]</rosparam>
+        <rosparam param="cam0_d"> [0.019265981371039506, 0.0011428473998276235, -0.0003811659324868097, 6.340084698783884e-05]</rosparam>
+        <rosparam param="T_C0toI">
+            [
+            1, 0, 0, 0,
+            0, 1, 0, 0,
+            0, 0, 1, 0,
+            0, 0, 0, 1
+            ]
+        </rosparam>
+
+    </node>
+
+
+    <!-- play the dataset -->
+    <!-- <node pkg="rosbag" type="play" name="rosbag" args="-d 1 -s $(arg bag_start) -u $(arg bag_durr) $(arg bag)" required="true"/> -->
+
+    <!-- record the trajectory if enabled -->
+    <node type="rviz" name="rviz" pkg="rviz" args="-d $(find ov_msckf)/launch/display.rviz" />
+
+</launch>

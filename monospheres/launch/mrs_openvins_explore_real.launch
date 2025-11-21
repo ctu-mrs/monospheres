@@ -1,0 +1,11 @@
+<launch>
+    <!-- Load ROS parameters from the config file -->
+    <arg name="UAV_NAME" default="$(env UAV_NAME)"/>
+
+    <!-- Run ov_extension.py node -->
+    <group ns="$(arg UAV_NAME)">
+    <rosparam command="load" file="$(find monospheres)/config/mrs_real.yaml"/>
+    <node pkg="monospheres" type="ov_extension.py" name="mono_exploration" output="screen" launch-prefix="nice -n 10"/>
+    </group>
+
+</launch>

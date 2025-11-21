@@ -1,0 +1,40 @@
+marker_scale: 1
+
+platform: "hardnav_underwater"
+
+local_mapping:
+  using_external_slam_pts: True
+  verbose_submap_construction: False
+
+  keyframe_dist_thr: 4
+  slam_filtering_enabled: False
+
+  smap_fragmentation_dist: 2000
+  n_sphere_samples_per_update: 100
+  carryover_dist: 4
+  max_sphere_sampling_z : 50
+
+  surfel_resolution: 1
+  frontier_resolution: 2
+
+  min_sphere_rad: 0.3
+
+local_nav:
+  enabled: True
+  uav_radius: 0.7
+  safety_replanning_trigger_odist: 1
+  min_planning_odist: 1.4
+  max_planning_odist: 5
+  safety_weight: 5
+
+  max_rrt_step_size: 2
+  max_heading_change_per_m: 0.314159 
+  path_abandon_time: 8
+
+  clearing_dist: 4
+  reaching_dist: 4
+  out_path_resolution: 0.5
+
+global_nav:
+  enabled: False
+  testing_mchunk_filename: "threeroom_big_to_left_end.pickle"

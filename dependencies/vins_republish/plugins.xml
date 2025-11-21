@@ -1,0 +1,6 @@
+
+<library path="lib/libVinsRepublisher2">
+  <class name="vins_republisher2/VinsRepublisher2" type="vins_republisher::VinsRepublisher" base_class_type="nodelet::Nodelet">
+    <description>VinsRepublisher nodelet</description>
+  </class>
+</library>

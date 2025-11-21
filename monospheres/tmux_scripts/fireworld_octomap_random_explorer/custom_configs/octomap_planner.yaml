@@ -1,0 +1,40 @@
+# NON SUBT
+safe_obstacle_distance: 1.5 # [m]
+euclidean_distance_cutoff: 1.5 # [m]
+unknown_is_occupied: False
+
+timeout_threshold: 1.0 # [s] time after which A* planning is aborted and returns path to the node with the so far lowest cost   
+
+subt_planner:
+  use: false
+
+# planning_tree:
+#   resolution: 0.25
+
+# SUBT
+# safe_obstacle_distance: 1.6 # [m]
+# euclidean_distance_cutoff: 1.6 # [m]
+# unknown_is_occupied: True
+
+# subt_planner:
+#   use: true
+
+
+max_waypoint_distance: -1.0 # [m] // or set negative for no padding
+
+# planning_tree:
+#   resolution: 0.1
+
+# visualization
+points_scale: 0.2
+lines_scale: 0.02
+
+
+# SUBT
+# safe_obstacle_distance: 1.6 # [m]
+# euclidean_distance_cutoff: 1.6 # [m]
+# unknown_is_occupied: True
+
+# subt_planner:
+#   use: True
+

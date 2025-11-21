@@ -1,0 +1,10 @@
+<launch>
+    <!-- Load ROS parameters from the config file -->
+    <rosparam command="load" file="$(find monospheres)/config/tello.yaml"/>
+
+    <!-- Run ov_extension.py node -->
+    <node pkg="monospheres" type="ov_extension.py" name="ov_extension_node" output="screen"/>
+
+    <!-- Run traj.py node -->
+    <!-- <node pkg="monospheres" type="mrs_path_follower.py" name="traj_node" output="screen" /> -->
+</launch>

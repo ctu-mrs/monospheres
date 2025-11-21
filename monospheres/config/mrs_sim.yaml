@@ -1,0 +1,96 @@
+marker_scale: 0.5
+
+platform: "bluefox_uav_gazebo"
+
+local_mapping:
+  n_sphere_samples_per_update: 150 # Number of new spheres sampled per mapping update
+  max_sphere_sampling_z : 20 # Max distance from camera for sphere sampling
+  
+  # Legacy mapping parameters for submapping - no longer used
+  carryover_dist: 4 
+  smap_fragmentation_dist: 20000
+  keyframe_dist_thr: 4
+  slam_filtering_enabled: False
+  using_external_slam_pts: True
+  verbose_submap_construction: True
+
+  surfel_resolution: 0.3 # Filtering radius for obstacle points (~obstacle resolution)
+  frontier_resolution: 1.5 # Frontier point resolution
+
+  # protection_constant: 0 # Uncomment this for the DBOF ablation
+  protection_constant: 1.1 # Constant for helping hystheresis in obstacle distance measurements
+
+  min_sphere_rad: 1.6 # Minimum sphere radius
+
+  fcu_frame: 'uav1/fcu'
+  odom_frame: 'global'
+  camera_frame: 'cam0'
+
+  img_topic: '/uav1/vio/camera/image_raw/compressed'
+  slampoints_topic: '/ov_msckf/points_slam'
+
+  get_camera_calib_from_topic: False
+  camera_info_topic: '/uav1/vio/camera/camera_info'
+
+  ofs_pts_enabled: True # set false for OVDE ablation
+  ofs_pts_dist: 15 # max distance for virtual depth estimation
+  ofs_min_parallax: 0.07 # min parallax for virtual depth estimation
+  ofs_pts_always_active: False #DANGEROUS if True  - makes virtual pts always active
+  ofs_ignore_tracking: False #DANGEROUS if True - does not check if virtual pts visible from the past poses
+  ofs_tracking_buffer_len: 10 # - how many past poses to use for checking visibility of virtual pts
+
+local_nav:
+  enabled: True
+
+  random_exploration: False # enable for random exploration ablation
+
+  # uav_radius: 0.8
+  # safety_replanning_trigger_odist: 1.5
+  # min_planning_odist: 1.8
+  # max_planning_odist: 8
+  # safety_weight: 50
+
+  uav_radius: 0.8
+  safety_replanning_trigger_odist: 1.0 # How close the trajectory has to be to obstacles to trigger replanning
+  min_planning_odist: 1.6 # Normal-state planning distance of UAV from obstacles
+  max_planning_odist: 8 # Distance after which obstacle distance (sphere radius) is not used in path cost computation (see SphereMap paper)
+  safety_weight: 50 # Weight for balancing path weight vs path safety (see SphereMap paper)
+
+  # Legacy parameters - rrt is now unused
+  max_rrt_step_size: 0.8
+  max_heading_change_per_m: 0.314159 
+  fix_heading_at_path_start: False #FFF ablation 
+  path_abandon_time: 8
+  clearing_dist: 1.5
+  rrt_clearing_dist: 3
+  reaching_dist: 1
+  out_path_resolution: 0.5
+
+  # Local-Global exploration parameters
+  local_exploration_radius: 15 # How far local exploration steps can sample goals
+  exploration_goal_blocking_dist: 7 # Distance around existing goal viewpoints to block further goal sampling
+  do_exploration_goal_blocking: True
+
+  predicted_trajectory_topic: '/uav1/control_manager/mpc_tracker/predicted_trajectory_debugging'
+  output_path_topic: '/uav1/trajectory_generation/path'
+
+  frontier_visibility_dist: 10 # How far frontiers must be visible from a goal viewpoint
+  min_num_frontiers_per_goal: 7 # Minimum number of frontiers a goal viewpoint must see to be valid
+
+  # frontier_visibility_dist: 10
+  # min_num_frontiers_per_goal: 3
+
+exploration_safety_area:
+  enabled: False
+
+  # CRANE WORLD 
+  x_min: -10
+  x_max: 10
+  y_min: -10
+  y_max: 10
+  z_min: -10
+  z_max: 10
+
+global_nav:
+  enabled: False
+  testing_mchunk_filename: "threeroom_big_to_left_end.pickle"

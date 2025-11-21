@@ -1,0 +1,11 @@
+lidar3d:
+
+  downsampling:
+    row_step: 16 # = 1280 / 64
+    col_step: 16 # = 720 / 64
+
+  clip:
+    range:
+      use: false
+      min: 0.5
+      max: 8.0

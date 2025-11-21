@@ -1,0 +1,17 @@
+exploration_safety_area:
+  enabled: True
+
+  # CAVE WORLD 
+  # x_min: 15
+  # x_max: 1000
+  # y_min: -1000
+  # y_max: -10
+  # z_min: 0
+  # z_max: 10
+
+  x_min: -1000
+  x_max: 1000
+  y_min: -1000
+  y_max: 1000
+  z_min: 0
+  z_max: 10

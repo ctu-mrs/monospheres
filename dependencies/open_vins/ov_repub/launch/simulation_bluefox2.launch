@@ -1,0 +1,44 @@
+<launch>
+
+    <!-- what config we are going to run (should match folder name) -->
+    <arg name="verbosity"   default="INFO" /> <!-- ALL, DEBUG, INFO, WARNING, ERROR, SILENT -->
+    <arg name="config"      default="bluefox_imu_simulation" /> <!-- euroc_mav, tum_vi, rpng_aruco -->
+    <arg name="config_path" default="$(find ov_msckf)/../config/$(arg config)/estimator_config.yaml" />
+
+    <!-- mono or stereo and what ros bag to play -->
+    <arg name="max_cameras" default="1" />
+    <arg name="use_stereo"  default="true" />
+    <arg name="dobag"       default="false" /> <!-- if we should play back the bag -->
+
+    <!-- saving trajectory path and timing information -->
+    <arg name="dosave"      default="false" />
+    <arg name="dotime"      default="false" />
+    <arg name="path_est"    default="/tmp/traj_estimate.txt" />
+    <arg name="path_time"   default="/tmp/traj_timing.txt" />
+
+    <!-- if we should viz the groundtruth -->
+    <arg name="dolivetraj"  default="false" />
+
+    <!-- MASTER NODE! -->
+    <node name="ov_msckf" pkg="ov_msckf" type="run_subscribe_msckf" output="screen" clear_params="true" required="true">
+
+        <!-- master configuration object -->
+        <param name="verbosity"              type="string" value="$(arg verbosity)" />
+        <param name="config_path"            type="string" value="$(arg config_path)" />
+
+        <!-- world/filter parameters -->
+        <param name="use_stereo"             type="bool"   value="$(arg use_stereo)" />
+        <param name="max_cameras"            type="int"    value="$(arg max_cameras)" />
+
+        <!-- timing statistics recording -->
+        <param name="record_timing_information"   type="bool"   value="$(arg dotime)" />
+        <param name="record_timing_filepath"      type="string" value="$(arg path_time)" />
+
+        <!-- bag topics -->
+        <!-- <param name="topic_imu"      type="string" value="/uav35/vio_imu/imu_raw" /> -->
+        <!-- <param name="topic_imu"      type="string" value="/uav35/vio_imu/imu_filtered" /> -->
+        <!-- <param name="topic_camera0"  type="string" value="/mv_25003659/image_raw" /> -->
+
+    </node>
+
+</launch>

@@ -1,0 +1,84 @@
+marker_scale: 0.5
+
+platform: "bluefox_uav_gazebo"
+
+local_mapping:
+  using_external_slam_pts: True
+  verbose_submap_construction: False
+
+  keyframe_dist_thr: 1
+  slam_filtering_enabled: False
+
+  smap_fragmentation_dist: 2000
+  n_sphere_samples_per_update: 300
+  carryover_dist: 4
+  max_sphere_sampling_z : 20
+
+  surfel_resolution: 0.3
+  frontier_resolution: 1.5
+
+  min_sphere_rad: 2
+
+  fcu_frame: 'uav25/fcu'
+
+  odom_frame: 'global' #OPENVINS
+  slampoints_topic: '/uav25/ov_msckf/points_slam' #OPENVINS
+  camera_frame: 'cam0' #OPENVINS
+
+  # odom_frame: 'uav25/fixed_origin' #MINS
+  # slampoints_topic: '/uav25/mins/cam/slam' #MINS
+  # camera_frame: 'uav25/mins_cam0' #MINS
+
+  img_topic: '/uav25/bluefox_vio_front/image_raw/compressed'
+
+  get_camera_calib_from_topic: False
+  camera_info_topic: '/uav25/bluefox_vio_front/camera_info'
+
+  ofs_freespace_pts_enabled: True
+  ofs_freespace_pts_dist: 10
+  ofs_freespace_min_parallax: 0.1
+  ofs_freespace_pts_always_active: False #DANGEROUS if True
+  ofs_freespace_ignore_tracking: False #DANGEROUS if True
+  ofs_freespace_tracking_buffer_len: 10
+
+local_nav:
+  enabled: True
+  uav_radius: 0.8
+  safety_replanning_trigger_odist: -1.5
+  min_planning_odist: 2
+  max_planning_odist: 8
+  safety_weight: 50
+
+  max_rrt_step_size: 1
+  max_heading_change_per_m: 0.314159 
+  path_abandon_time: 8
+
+  clearing_dist: 1.5
+  rrt_clearing_dist: 3
+  reaching_dist: 1
+  out_path_resolution: 0.5
+
+  local_exploration_radius: 20
+  exploration_goal_blocking_dist: 5
+
+  predicted_trajectory_topic: 'control_manager/mpc_tracker/prediction_full_state'
+  output_path_topic: 'trajectory_generation/path'
+
+  frontier_visibility_dist: 8
+  min_num_frontiers_per_goal: 3
+
+exploration_safety_area:
+  enabled: True
+
+  x_min: 1
+  x_max: 30
+
+  y_min: -7
+  y_max: 7
+
+  z_min: -1
+  z_max: 4
+
+global_nav:
+  enabled: False
+  testing_mchunk_filename: "threeroom_big_to_left_end.pickle"

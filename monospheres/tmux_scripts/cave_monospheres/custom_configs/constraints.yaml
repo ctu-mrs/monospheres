@@ -1,0 +1,11 @@
+constraint_management:
+
+  # list of allowed gains per odometry mode
+  allowed_constraints:
+    # VIO: ["slow", "medium", "fast"]
+    # GPS: ["slow", "medium", "fast"]
+    VIO: ["medium", "fast"]
+    GPS: ["medium", "fast"]
+
+  fallback_constraints:
+    GPS: "medium"

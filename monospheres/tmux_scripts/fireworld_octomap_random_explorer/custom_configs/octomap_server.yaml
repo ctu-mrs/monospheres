@@ -1,0 +1,102 @@
+# for point cloud raycasting
+#
+resolution: 0.5
+
+octomap_global_vis:
+  free_throttled_rate: 0.1
+
+local_map:
+
+  # the bounding box distance of the local map
+  size:
+    max_width: 200 # [m] max width of the local map
+    max_height: 200 # [m] max height of the local map
+    min_width: 100 # [m] min width of the local map
+    min_height: 100 # [m] min height of the local map
+    duty_high_threshold: 0.9 # [s] if inserting scan takes more time than this, decrease local map size
+    duty_low_threshold: 0.8 # [s] if inserting scan takes less time than this, increase local map size
+
+  # the publisher rate of the local map
+  publisher_rate: 10.0 # [Hz]
+
+  publish_full: true # should publish map with full probabilities?
+  publish_binary: false # should publish map with binary occupancy?
+
+global_map:
+
+  size: 180 # [m]
+
+  # should create a global map from the local map?
+  enabled: true 
+
+  # the publisher rate of the global map
+  publisher_rate: 1.0 # [Hz]
+
+  # the rate of inserting the local map into the global map
+  creation_rate: 1.0 # [Hz]
+
+  # should we prune the map before publishing?
+  compress: true
+
+  publish_full: true # should publish map with full probabilities?
+  publish_binary: false # should publish map with binary occupancy?
+#
+sensor_params:
+
+  3d_lidar:
+
+    n_sensors: 1
+
+    sensor_0:
+
+      max_range: 20.0 # [m] max range of points to be included as occupied, free space is updated up to min(max_range, free_ray_distance)
+      free_ray_distance: 15.0 # [m] max distance for free space raycasting
+
+      # fallback values used for free space raycasting for missing data, uses pointcloud dimensions from the incoming message by default
+      vertical_fov_angle: deg(90.0)
+      vertical_rays: 128
+      horizontal_rays: 128
+
+      # what to do when data in the organized pointcloud is missing (is nan)
+      unknown_rays:
+        update_free_space: false # update free space when data at the specific point is missing?
+        clear_occupied: false # clear occupied voxels using unknown rays? BEWARE, setting this to true is very DANGEROUS
+        free_ray_distance_unknown: 10.0 # [m] ray length for raycasting
+
+  depth_camera:
+
+    n_sensors: 0
+
+    sensor_0:
+
+      max_range: 9.0 # [m] max range of points to be included as occupied, free space is updated up to min(max_range, free_ray_distance)
+      free_ray_distance: 8.0 # [m] max distance for free space raycasting
+
+      # fallback values used for free space raycasting for missing data, uses pointcloud dimensions and camera_info by default
+      horizontal_fov_angle: deg(70.0)
+      vertical_fov_angle: deg(35.0)
+      horizontal_rays: 80
+      vertical_rays: 45
+
+      # what to do when data in the organized pointcloud is missing (is nan)
+      unknown_rays:
+        update_free_space: true # update free space when data at the specific point is missing?
+        clear_occupied: false # clear occupied voxels using unknown rays? BEWARE, setting this to true is very DANGEROUS
+        free_ray_distance_unknown: 5.0 # [m] ray length for raycasting
+
+    sensor_1:
+
+      max_range: 9.0 # [m] max range of points to be included as occupied, free space is updated up to min(max_range, free_ray_distance)
+      free_ray_distance: 8.0 # [m] max distance for free space raycasting
+
+      # fallback values used for free space raycasting for missing data, uses pointcloud dimensions and camera_info by default
+      horizontal_fov_angle: deg(70.0)
+      vertical_fov_angle: deg(35.0)
+      horizontal_rays: 80
+      vertical_rays: 45
+
+      # what to do when data in the organized pointcloud is missing (is nan)
+      unknown_rays:
+        update_free_space: true # update free space when data at the specific point is missing?
+        clear_occupied: false # clear occupied voxels using unknown rays? BEWARE, setting this to true is very DANGEROUS
+        free_ray_distance_unknown: 5.0 # [m] ray length for raycasting

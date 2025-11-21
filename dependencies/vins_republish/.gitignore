@@ -1,0 +1,47 @@
+# raw data
+data/
+
+# local backup files
+*.BAK
+
+# vim swap files
+*.swp
+*.swo
+
+# extra large files
+*.bag
+
+# CodeBlocks temporary files
+*.layout
+*.depend
+
+# PyCharm bullshit
+.idea
+
+# python cache
+*.pyc
+
+# other data files
+*.csv
+*.pdf
+
+# Catkin bullshit
+.catkin_tools
+
+# build related files
+obj/
+objs/
+build/
+
+# weight files (too large to be included)
+*.weights*
+
+# testing images, videos etc.
+# *.png
+*.jpg
+*.jpeg
+*.gif
+*.avi
+*.mpg
+*.mpeg
+*.mp4

@@ -1,0 +1,69 @@
+# max_default_altitude: 1000.0
+
+# Lateral state estimator:
+# OPTFLOW, GPS, OPTFLOWGPS, RTK, LIDAR, VIO, VSLAM,  HECTOR
+lateral_estimator: "GPS"
+
+# Altitude state estimator:
+# HEIGHT - rangefinder, PLANE - height above plane estimated from realsense, BRICK - height above BRICK
+altitude_estimator: "HEIGHT"
+
+# Heading state estimator:
+# GYRO - gyro, COMPASS - gyro, compass, OPTFLOW - gyro, optflow, HECTOR - gyro, hector slam
+heading_estimator: "PIXHAWK" 
+
+# Active estimators are started at node launch and can be switched to during flight
+state_estimators:
+  active: ["GPS", "VIO"]
+
+heading_estimators:
+  active: ["PIXHAWK", "VIO"]
+
+altitude_estimators:
+  active: ["HEIGHT", "VIO"]
+
+# altitude estimation parameters# #{
+ 
+altitude:
+
+# covariances# #{
+
+  # Process covariance
+  Q: [100.0, 0, 0,
+      0, 100000.0, 0,
+      0, 0, 100000.0]
+
+  # Covariances of measurements
+  R:
+    height_vio: [1]
+    vel_vio: [100]
+
+# # #}
+
+# # #}
+
+# lateral estimation parameters# #{
+lateral:
+
+# covariances# #{
+
+# Covariances of measurements
+  R:
+    pos_vio: [1] #0.1
+    vel_vio: [100] #10
+
+# # #}
+
+# # #}
+
+# heading estimation parameters# #{
+heading:
+
+# covariances# #{
+
+  # Covariances of measurements
+  R:
+    hdg_vio: [0.01] #100
+# # #}
+
+# # #}

@@ -1,0 +1,10 @@
+<launch>
+  <!-- <arg name="UAV_NAME" default="$(env UAV_NAME)"/> -->
+
+  <group>
+
+    <node pkg="rviz" type="rviz" name="rviz" args="-d $(find monospheres)/rviz/mrs_sim.rviz" launch-prefix="bash -c 'sleep 1; $0 $@' " />
+
+  </group>
+
+</launch>
