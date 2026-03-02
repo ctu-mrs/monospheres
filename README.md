@@ -1,6 +1,6 @@
 # MonoSpheres
 This is the code repository for the MonoSpheres mapping and exploration approach for monocular UAVs.
-The method is currently under review, preprint is available at TODO.
+The method is currently under review, preprint is available at [arxiv](https://arxiv.org/pdf/2511.17299).
 ## Experiment Videos
 Videos from 2 real-world runs using MonoSpheres and runs in the simulated indoor and outdoor environments using both Monospheres and the baseline grid-based mapping and exploration method are available in experiment_videos.mp4. 
 
