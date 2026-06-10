@@ -1,6 +1,8 @@
 # MonoSpheres
-This is the code repository for the MonoSpheres mapping and exploration approach for monocular UAVs. Currently, the code supports ROS, but we are working on porting it to ROS2 (expected completion - June 2026).
-The method has been accepted to RA-L and will be published soon, in the meanwhile, preprint is available at [arxiv](https://arxiv.org/pdf/2511.17299).
+This is the code repository for the MonoSpheres mapping and exploration approach for monocular UAVs which has achieved outdoor monocular exploration in multiple real-world and simulated environments.
+
+The accompanying paper "[MonoSpheres: Large-Scale Monocular SLAM-Based UAV Exploration Through Perception-Coupled Mapping and Planning](https://ieeexplore.ieee.org/document/11517436)" has been accepted to Robotics and Automation Letters and is available as open access. Please cite this publication if you use our work in your research.
+
 ## Experiment Videos
 Videos from 2 real-world runs using MonoSpheres and runs in the simulated indoor and outdoor environments using both Monospheres and the baseline grid-based mapping and exploration method are available in experiment_videos.mp4. 
 
@@ -18,6 +20,7 @@ To run these scripts, it is neccessary to first install the MRS sytem and build 
 5) Run `monospheres/tmux_scripts/fireworld_monospheres/tmux.sh`. This will launch a tmux session using the tmux config of the MRS system. If you want to use your own config or the default tmux keybindings, you can delete the line `tmux_options: -f /etc/ctu-mrs/tmux.conf` in `session.yaml`. Otherwise, you will be able to navigate the session using the MRS system tmux keybinds available at https://github.com/ctu-mrs/mrs_cheatsheet?tab=readme-ov-file ). You can close the session using `Ctrl+a, k, enter`
 
 After launching the tmux session, you should see a Gazebo simulation window pop up and a drone should be spawned. Then, after the automatic takeoff, an RVIZ window should open, showing the OpenVINS debug image and the 3D map constructed by MonoSpheres. The `start_maneuver` tab will send a command for the UAV to go 5m forward after takeoff and start the automatic exploration. You can also control the UAV manually by moving to the `status` tmux tab, pressing `Ctrl+R` to switch to the remote mode and the use w,a,s,d,q,e,r,f.  (see https://ctu-mrs.github.io/docs/features/status_tui/ for details). 
+
 
 
 ## Troubleshooting
