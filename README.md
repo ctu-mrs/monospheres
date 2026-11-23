@@ -1,4 +1,4 @@
-# MonoSpheres
+# MonoSpheres (ROS2)
  
  ![Method overview image](monospheres_intro_img.png)
 This is the code repository for the MonoSpheres mapping and exploration approach for monocular UAVs which has achieved outdoor monocular exploration in multiple real-world and simulated environments.
@@ -7,7 +7,7 @@ Videos - [https://youtu.be/hxYtRvwQrKc](https://youtu.be/hxYtRvwQrKc)
 
 The accompanying paper "[MonoSpheres: Large-Scale Monocular SLAM-Based UAV Exploration Through Perception-Coupled Mapping and Planning](https://ieeexplore.ieee.org/document/11517436)" has been accepted to Robotics and Automation Letters and is available as open access. Please cite this publication if you use our work in your research.
 
-This version runs on **ROS 2 Jazzy** with the **MRS UAV System** and the **FlightForge** simulator.
+This version runs on **ROS 2 Jazzy** with the **MRS UAV System** and the **FlightForge** simulator instead of Gazebo.
 The original ROS 1 (Noetic + Gazebo) version used for the paper is preserved under the git tag
 [`ros1`](../../tree/ros1).
 
@@ -69,17 +69,12 @@ planning modules, with comments explaining their purpose). The launch file is
 ## Troubleshooting
 - **The UAV took off but nothing happens.** First check that OpenVINS initialized: the `vio` tab
   should stop printing initialization messages and `ros2 topic echo /uav1/open_vins/odomimu` should
-  publish. The post-takeoff steps wait for this and print `!!! VIO NOT INITIALIZED !!!` on timeout.
-  OpenVINS initializes from a static start and needs visible texture/structure in front of the
-  camera; a spawn facing a flat empty plane often fails. Change the spawn in `config/simulator.yaml`.
-- **Then check the `monospheres` tab.** The node prints runtime statistics for map building and
-  planning. If the map is built but the UAV does not explore, rerun the service in the
-  `exploration_start` tab.
-- **Everything is slow / long pauses before moving.** Check the `simulator` tab for the actual real-time
-  factor (`actual RTF`). FlightForge renders on the GPU; at a low RTF all sim-time timeouts in the
-  planner take proportionally longer in wall time.
-- **Two simulations / clocks interfere.** Other ROS 2 processes on the same `ROS_DOMAIN_ID` (e.g. set in
-  `~/.bashrc`) also publish `/clock` and `/tf`. Stop them or use a different domain ID.
+  publish. The '/uav1/open_vins/trackhist' image (in the provided RVIZ config) should also show a green CAM:0 text when initialized.
+  The post-takeoff steps wait for this and print `!!! VIO NOT INITIALIZED !!!` on timeout.
+  In general, selecting a spawn location with some object close to the camera will help (OpenVINS initializes from a static start and needs visible texture/structure in front of the
+  camera. A spawn facing a flat empty plane often fails VIO initialization.) You can change the spawn in `config/simulator.yaml`.
+- **If the VIO is initialized but drone is not moving** Check the logs of the monospheres tab and RVIZ.
+  In the provided RVIZ config (launches with the session), you should see red obstacle points, green spheres, blue frontier points and gold arrows signifying potential goal viewpoints. If any of these is not visible, check the monospheres tab logs for potential causes (it is verbose by default).
 
 ## License
 The MonoSpheres code is released under the [MIT License](LICENSE).
