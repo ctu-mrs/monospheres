@@ -2,19 +2,17 @@
 # #{ imports
 
 import copy
-import rospy
+from monospheres.ros_utils import safe_callback, get_param, now, now_msg, to_sec, time_diff_sec, own_group, sensor_qos, quaternion_matrix, TfListener, package_data_dir
 from std_srvs.srv import Empty as EmptySrv
-from std_srvs.srv import EmptyResponse as EmptySrvResponse
 import threading
 
 import heapq
 
-import rospkg
 
 from monospheres.common_spatial import *
 
 from sensor_msgs.msg import Image, CompressedImage, PointCloud2
-import sensor_msgs.point_cloud2 as pc2
+from sensor_msgs_py import point_cloud2 as pc2
 import mrs_msgs.msg
 import std_msgs.msg
 from scipy.spatial.transform import Rotation
@@ -41,10 +39,8 @@ import io
 import copy
 
 from scipy.spatial.transform import Rotation
-import tf
 import tf2_ros
 import tf2_geometry_msgs  # for transforming geometry_msgs
-import tf.transformations as tfs
 from geometry_msgs.msg import TransformStamped
 
 
@@ -90,10 +86,11 @@ class ExplorationGoal:
 
 class LocalNavigatorModule:
     def __init__(self, mapper, ptraj_topic, output_path_topic):# # #{
+        self.node = mapper.node
 
         self.main_state = "idle"
-        self.min_vp_frontier_val = rospy.get_param("local_nav/min_num_frontiers_per_goal")
-        self.random_explo = rospy.get_param("local_nav/random_exploration")
+        self.min_vp_frontier_val = get_param(self.node, "local_nav/min_num_frontiers_per_goal")
+        self.random_explo = get_param(self.node, "local_nav/random_exploration")
 
         self.mapper = mapper
         self.planning_spheremap = None
@@ -104,55 +101,55 @@ class LocalNavigatorModule:
         self.predicted_traj_mutex = threading.Lock()
 
         # OUTPUT PATH PUB
-        self.path_for_trajectory_generator_pub = rospy.Publisher(output_path_topic, mrs_msgs.msg.Path, queue_size=10)
+        self.path_for_trajectory_generator_pub = self.node.create_publisher(mrs_msgs.msg.Path, output_path_topic, 10)
 
         # OUTPUT REFERENCE PUB
-        self.control_reference_pub = rospy.Publisher("/uav1/control_manager/reference", mrs_msgs.msg.ReferenceStamped, queue_size=10) #FIXME parametrize
+        self.control_reference_pub = self.node.create_publisher(mrs_msgs.msg.ReferenceStamped, get_param(self.node, "local_nav/control_reference_topic", "/uav1/control_manager/reference"), 10)
 
 
         # VIS PUB
         # vis_prefix = "AAA/"
         vis_prefix = ""
-        self.path_planning_vis_pub = rospy.Publisher(vis_prefix + 'path_planning_vis', MarkerArray, queue_size=10)
-        self.roadmap_vis_pub = rospy.Publisher(vis_prefix +'roadmap', MarkerArray, queue_size=10)
-        self.global_path_planning_vis_pub = rospy.Publisher(vis_prefix +'path_planning_vis_global', MarkerArray, queue_size=10)
-        self.unsorted_vis_pub = rospy.Publisher(vis_prefix +'unsorted_markers', MarkerArray, queue_size=10)
-        self.exploration_goals_vis_pub = rospy.Publisher(vis_prefix +'exploration_goals', MarkerArray, queue_size=10)
+        self.path_planning_vis_pub = self.node.create_publisher(MarkerArray, vis_prefix + 'path_planning_vis', 10)
+        self.roadmap_vis_pub = self.node.create_publisher(MarkerArray, vis_prefix +'roadmap', 10)
+        self.global_path_planning_vis_pub = self.node.create_publisher(MarkerArray, vis_prefix +'path_planning_vis_global', 10)
+        self.unsorted_vis_pub = self.node.create_publisher(MarkerArray, vis_prefix +'unsorted_markers', 10)
+        self.exploration_goals_vis_pub = self.node.create_publisher(MarkerArray, vis_prefix +'exploration_goals', 10)
 
         # SERVICES
-        self.setstate_idle_srv = rospy.Service("navigation/setstate_idle", EmptySrv, self.setstate_idle)
-        self.setstate_homing_srv = rospy.Service("navigation/setstate_homing", EmptySrv, self.setstate_homing)
-        self.setstate_exploring_srv = rospy.Service("navigation/setstate_exploring", EmptySrv, self.setstate_exploring)
+        self.setstate_idle_srv = self.node.create_service(EmptySrv, "navigation/setstate_idle", self.setstate_idle, callback_group=own_group())
+        self.setstate_homing_srv = self.node.create_service(EmptySrv, "navigation/setstate_homing", self.setstate_homing, callback_group=own_group())
+        self.setstate_exploring_srv = self.node.create_service(EmptySrv, "navigation/setstate_exploring", self.setstate_exploring, callback_group=own_group())
 
         self.main_state = "exploring"
 
         # PARAMS
-        self.planning_enabled = rospy.get_param("local_nav/enabled")
-        self.marker_scale = rospy.get_param("marker_scale") * 1.2
-        self.path_step_size = rospy.get_param("local_nav/max_rrt_step_size")
-        self.max_heading_change_per_m = rospy.get_param("local_nav/max_heading_change_per_m")
+        self.planning_enabled = get_param(self.node, "local_nav/enabled")
+        self.marker_scale = get_param(self.node, "marker_scale") * 1.2
+        self.path_step_size = get_param(self.node, "local_nav/max_rrt_step_size")
+        self.max_heading_change_per_m = get_param(self.node, "local_nav/max_heading_change_per_m")
 
-        self.safety_replanning_trigger_odist = rospy.get_param("local_nav/safety_replanning_trigger_odist")
-        self.min_planning_odist = rospy.get_param("local_nav/min_planning_odist")
-        self.max_planning_odist = rospy.get_param("local_nav/max_planning_odist")
-        self.path_abandon_time = rospy.get_param("local_nav/path_abandon_time")
+        self.safety_replanning_trigger_odist = get_param(self.node, "local_nav/safety_replanning_trigger_odist")
+        self.min_planning_odist = get_param(self.node, "local_nav/min_planning_odist")
+        self.max_planning_odist = get_param(self.node, "local_nav/max_planning_odist")
+        self.path_abandon_time = get_param(self.node, "local_nav/path_abandon_time")
 
-        self.planning_clearing_dist = rospy.get_param("local_nav/clearing_dist")
-        self.rrt_planning_clearing_dist = rospy.get_param("local_nav/rrt_clearing_dist")
-        self.output_path_resolution = rospy.get_param("local_nav/out_path_resolution")
+        self.planning_clearing_dist = get_param(self.node, "local_nav/clearing_dist")
+        self.rrt_planning_clearing_dist = get_param(self.node, "local_nav/rrt_clearing_dist")
+        self.output_path_resolution = get_param(self.node, "local_nav/out_path_resolution")
 
-        self.safety_area_enabled = rospy.get_param("exploration_safety_area/enabled")
-        self.safety_area_x_min = rospy.get_param("exploration_safety_area/x_min")
-        self.safety_area_x_max = rospy.get_param("exploration_safety_area/x_max")
-        self.safety_area_y_min = rospy.get_param("exploration_safety_area/y_min")
-        self.safety_area_y_max = rospy.get_param("exploration_safety_area/y_max")
-        self.safety_area_z_min = rospy.get_param("exploration_safety_area/z_min")
-        self.safety_area_z_max = rospy.get_param("exploration_safety_area/z_max")
+        self.safety_area_enabled = get_param(self.node, "exploration_safety_area/enabled")
+        self.safety_area_x_min = get_param(self.node, "exploration_safety_area/x_min")
+        self.safety_area_x_max = get_param(self.node, "exploration_safety_area/x_max")
+        self.safety_area_y_min = get_param(self.node, "exploration_safety_area/y_min")
+        self.safety_area_y_max = get_param(self.node, "exploration_safety_area/y_max")
+        self.safety_area_z_min = get_param(self.node, "exploration_safety_area/z_min")
+        self.safety_area_z_max = get_param(self.node, "exploration_safety_area/z_max")
 
 
         # PREDICTED TRAJ
-        # self.sub_predicted_trajectory = rospy.Subscriber(ptraj_topic, mrs_msgs.msg.MpcPredictionFullState, self.predicted_trajectory_callback, queue_size=10000)
-        self.sub_predicted_trajectory = rospy.Subscriber(ptraj_topic, PoseArray, self.predicted_trajectory_callback, queue_size=10000)
+        # self.sub_predicted_trajectory = self.node.create_subscription(mrs_msgs.msg.MpcPredictionFullState, ptraj_topic, safe_callback(self.node, self.predicted_trajectory_callback), sensor_qos(10000), callback_group=own_group())
+        self.sub_predicted_trajectory = self.node.create_subscription(PoseArray, ptraj_topic, safe_callback(self.node, self.predicted_trajectory_callback), sensor_qos(10000), callback_group=own_group())
         self.predicted_trajectory_pts_global = None
 
         # PLANNING PARAMS
@@ -166,27 +163,27 @@ class LocalNavigatorModule:
         self.local_reconsidering_index = 0
         self.max_local_reconsidering_index = 3
 
-        self.global_reconsidering_last_time = rospy.Time.now()
+        self.global_reconsidering_last_time = now(self.node)
         self.global_reconsidering_period  = 2
 
-        self.local_nav_start_time = rospy.get_rostime()
+        self.local_nav_start_time = now(self.node)
         self.traj_min_duration = 10
 
         self.mrs_path_reaching_dist = 0.3
         self.mrs_path = None
         self.mrs_path_index = None
-        self.mrs_path_send_time = rospy.Time.now()
+        self.mrs_path_send_time = now(self.node)
         self.mrs_path_failing_time = 8
 
         self.current_goal_vp_global = None
-        self.reaching_dist = rospy.get_param("local_nav/reaching_dist")
+        self.reaching_dist = get_param(self.node, "local_nav/reaching_dist")
         self.reaching_angle = np.pi/2
 
         self.max_goal_vp_pathfinding_times = 3
         self.current_goal_vp_pathfinding_times = 0
 
         self.fspace_bonus_mod = 1.2
-        self.safety_weight = rospy.get_param("local_nav/safety_weight")
+        self.safety_weight = get_param(self.node, "local_nav/safety_weight")
 
         # ROOMBA PARAMS
         self.roomba_progress_lasttime = None
@@ -200,29 +197,29 @@ class LocalNavigatorModule:
         self.roomba_bounds_global = [-20, 20, -30, 30, -10, 20]
 
         # EXPLO PARAMS
-        self.local_exploration_radius = rospy.get_param("local_nav/local_exploration_radius")
+        self.local_exploration_radius = get_param(self.node, "local_nav/local_exploration_radius")
         self.exploration_goals = None
-        self.goal_blocking_dist = rospy.get_param("local_nav/exploration_goal_blocking_dist")
-        self.do_goal_blocking = rospy.get_param("local_nav/do_exploration_goal_blocking")
-        self.fix_heading_at_path_start = rospy.get_param("local_nav/fix_heading_at_path_start")
+        self.goal_blocking_dist = get_param(self.node, "local_nav/exploration_goal_blocking_dist")
+        self.do_goal_blocking = get_param(self.node, "local_nav/do_exploration_goal_blocking")
+        self.fix_heading_at_path_start = get_param(self.node, "local_nav/fix_heading_at_path_start")
         self.goal_blocking_angle = np.pi/3
         self.goal_max_obsvs = 1
-        self.frontier_visibility_dist = rospy.get_param("local_nav/frontier_visibility_dist")
+        self.frontier_visibility_dist = get_param(self.node, "local_nav/frontier_visibility_dist")
         
         # # #}
 
     # --SERVICES
-    def setstate_exploring(self, req):# # #{
+    def setstate_exploring(self, req=None, resp=None):# # #{
         self.main_state = "exploring"
-        return EmptySrvResponse()# # #}
+        return EmptySrv.Response()# # #}
 
-    def setstate_idle(self, req):# # #{
+    def setstate_idle(self, req=None, resp=None):# # #{
         self.main_state = "idle"
-        return EmptySrvResponse()# # #}
+        return EmptySrv.Response()# # #}
 
-    def setstate_homing(self, req):# # #{
+    def setstate_homing(self, req=None, resp=None):# # #{
         self.main_state = "homing"
-        return EmptySrvResponse()# # #}
+        return EmptySrv.Response()# # #}
 
     # --PLANNING CORE
 
@@ -391,7 +388,7 @@ class LocalNavigatorModule:
 
         max_conn_size = max_step_size * 1.05
 
-        comp_start_time = rospy.get_rostime()
+        comp_start_time = now(self.node)
         n_iters = 0
         n_unsafe_fspace = 0
         n_unsafe_obs = 0
@@ -419,7 +416,7 @@ class LocalNavigatorModule:
 
         # MAIN SPREAD LOOP# #{
         while True:
-            time_left = max_comp_time - (rospy.get_rostime() - comp_start_time).to_sec()
+            time_left = max_comp_time - time_diff_sec(now(self.node), comp_start_time)
             if time_left <= 0 or n_iters >= max_iter:
                 break
             n_iters += 1
@@ -588,7 +585,7 @@ class LocalNavigatorModule:
             self.visualize_rrt_tree(self.planning_spheremap.T_global_to_own_origin, tree_pos, None, odists, parent_indices)
 
         # FIND ALL LEAFS, EVALUATE THEM# #{
-        comp_start_time = rospy.get_rostime()
+        comp_start_time = now(self.node)
         heads_indices = np.array([i for i in range(tree_pos.shape[0]) if len(child_indices[i]) == 0])
         print("N HEADS: " + str(heads_indices.size))
 
@@ -999,8 +996,8 @@ class LocalNavigatorModule:
         if future_pts is None:
             return
         dist_pred = np.linalg.norm(future_pts[-1] - current_pos)
-        rospy.loginfo("Dist pred: " + str(dist_pred))
-        rospy.loginfo("future pts: " + str(future_pts.size / 3))
+        self.node.get_logger().info("Dist pred: " + str(dist_pred))
+        self.node.get_logger().info("future pts: " + str(future_pts.size / 3))
 
         # Check path
         unsafe_idxs, odists = self.find_unsafe_pt_idxs_on_global_path(future_pts, future_headings, self.safety_replanning_trigger_odist, self.planning_clearing_dist, smap)
@@ -1008,11 +1005,11 @@ class LocalNavigatorModule:
             return
 
         firstunsafedist = np.linalg.norm(future_pts[unsafe_idxs[0]] - current_pos)
-        rospy.logwarn("some unsafety found! at index: " + str(unsafe_idxs[0]) + " dist: " + str(firstunsafedist))
+        self.node.get_logger().warn("some unsafety found! at index: " + str(unsafe_idxs[0]) + " dist: " + str(firstunsafedist))
 
         mindist = 5
         if firstunsafedist > mindist:
-            rospy.loginfo("is far enough!")
+            self.node.get_logger().info("is far enough!")
             return
 
 
@@ -1063,12 +1060,12 @@ class LocalNavigatorModule:
                     lock2 = ScopedLock(self.mapper.spheremap_mutex)
                 with lock2:
                     comp_start_time = time.time()
-                    rospy.loginfo("updating frontiers")
+                    self.node.get_logger().info("updating frontiers")
                     # self.planning_spheremap.updateFrontiers(self.mapper.potential_fr_sample_pts, self.mapper.frontier_resolution)
                     self.mapper.spheremap.updateFrontiers(self.mapper.potential_fr_sample_pts, self.mapper.frontier_resolution)
                     self.planning_spheremap.frontier_points = self.mapper.spheremap.frontier_points
                     self.planning_spheremap.frontier_normals = self.mapper.spheremap.frontier_normals
-                    rospy.loginfo("done updating frontiers")
+                    self.node.get_logger().info("done updating frontiers")
                     comp_time = time.time() - comp_start_time
                     print("frontier (in planning loop) computation: " + str((comp_time) * 1000) +  " ms")
 
@@ -1105,7 +1102,7 @@ class LocalNavigatorModule:
             # PARSE THE MSG
             # pts = np.array([[pt.x, pt.y, pt.z] for pt in msg.position])
             # headings = np.array([h for h in msg.heading])
-            # rospy.logwarn("got pts in pred traj: " + str(len(msg.poses)))
+            # self.node.get_logger().warn("got pts in pred traj: " + str(len(msg.poses)))
 
             pts = np.array([[pose.position.x, pose.position.y, pose.position.z] for pose in msg.poses])
             headings = np.array([0 for pose in msg.poses]) #FIXME
@@ -1125,7 +1122,7 @@ class LocalNavigatorModule:
             # print("PTS FCU: ")
             pts_fcu, headings_fcu = transformViewpoints(pts_global, headings_global, T_fcu_to_global)
 
-            # rospy.logwarn("global: " + str(pts_global.shape))
+            # self.node.get_logger().warn("global: " + str(pts_global.shape))
             # print(pts_fcu)
             # print(headings_fcu)
 
@@ -1137,7 +1134,7 @@ class LocalNavigatorModule:
     # # #}
 
     def get_future_predicted_trajectory_global_frame(self):# # #{
-        now = rospy.get_rostime()
+        now_t = now(self.node)
 
         stamps = None
         pts = None
@@ -1163,7 +1160,7 @@ class LocalNavigatorModule:
         first_future_index = 0
         # first_future_index = -1
         # for i in range(n_pred_pts):
-        #     if (stamps[i] - now).to_sec() > 0:
+        #     if time_diff_sec(stamps[i], now_t) > 0:
         #         first_future_index = i
         #         break
         # if first_future_index == -1:
@@ -1172,7 +1169,7 @@ class LocalNavigatorModule:
 
         pts_global = pts[first_future_index:, :]
         headings_global = headings[first_future_index:]
-        relative_times = np.array([(stamps[i] - now).to_sec() for i in range(first_future_index, n_pred_pts)])
+        relative_times = np.array([time_diff_sec(stamps[i], now_t) for i in range(first_future_index, n_pred_pts)])
 
         return pts_global, headings_global, relative_times
 
@@ -1240,7 +1237,7 @@ class LocalNavigatorModule:
         # msg.header.frame_id = 'uav1/vio_origin' #FCU!!!!
         msg.header.frame_id = self.fcu_frame
         # msg.header.frame_id = 'uav1/local_origin'
-        msg.header.stamp = rospy.Time.now()
+        msg.header.stamp = now_msg(self.node)
         msg.use_heading = not headings is None
         # msg.use_heading = False
         msg.fly_now = True
@@ -1270,8 +1267,8 @@ class LocalNavigatorModule:
         print("SENT PATH TO TRAJ GENERATOR, N PTS: " + str(n_pts))
         self.mrs_path = path
         self.mrs_path_index = 0
-        self.mrs_path_send_time = rospy.Time.now()
-        self.last_mrs_path_moved_time = rospy.Time.now()
+        self.mrs_path_send_time = now(self.node)
+        self.last_mrs_path_moved_time = now(self.node)
 
         return None
 # # #}
@@ -1318,7 +1315,7 @@ class LocalNavigatorModule:
                 self.roadmap_index = i
                 print("ROADMAP - increased carrot index to " + str(i))
                 # TODO - if intermittent goals have some vp req, you must pass it too
-                self.last_carrot_update = rospy.Time.now()
+                self.last_carrot_update = now(self.node)
             i += 1
 
         arrow_pos = self.roadmap.points[self.roadmap_index, :].flatten() - np.array([0,0,10]).flatten()
@@ -1356,7 +1353,7 @@ class LocalNavigatorModule:
         # # #}
 
         # CHECK IF NOT PROGRESSING FOR A LONG TIME# #{
-        if (rospy.Time.now() - self.last_carrot_update).to_sec() > self.roadmap_failing_time and not self.roadmap_navigation_success:
+        if time_diff_sec(now(self.node), self.last_carrot_update) > self.roadmap_failing_time and not self.roadmap_navigation_success:
             print("ROADMAP - not progressing for a long time, setting as failed!")
             self.roadmap_navigation_failed = True
             return
@@ -1445,10 +1442,10 @@ class LocalNavigatorModule:
                 if dist < self.mrs_path_reaching_dist:
                     self.mrs_path_index = i
                     print("MRS PATH - increased carrot index to " + str(i))
-                    self.last_mrs_path_moved_time = rospy.Time.now()
+                    self.last_mrs_path_moved_time = now(self.node)
                 i += 1
 
-            notmovedtime = (rospy.Time.now() - self.last_mrs_path_moved_time).to_sec()
+            notmovedtime = time_diff_sec(now(self.node), self.last_mrs_path_moved_time)
             if notmovedtime > self.mrs_path_failing_time or self.mrs_path_index == path_len:
                 print("MRS PATH - replanning")
                 print(self.mrs_path_index)
@@ -1536,7 +1533,7 @@ class LocalNavigatorModule:
 
         # SEND IT
         self.send_path_to_trajectory_generator(pts_fcu, headings_fcu)
-        self.trajectory_following_moved_time = rospy.get_rostime()
+        self.trajectory_following_moved_time = now(self.node)
 
         # VISUALIZE SHORTPATH THAT FOLLOWS ROADMAP
         self.visualize_trajectory(pts_global, np.eye(4), headings_global, do_line = False, frame_id = self.odom_frame, pub = self.path_planning_vis_pub, clr=[0,0,0])
@@ -1549,7 +1546,7 @@ class LocalNavigatorModule:
         self.roadmap_navigation_success = False
         self.roadmap_index = 0
         self.roadmap = roadmap
-        self.last_carrot_update = rospy.Time.now()
+        self.last_carrot_update = now(self.node)
     # # #}
 
     def hardstop(self):# # #{
@@ -1565,7 +1562,7 @@ class LocalNavigatorModule:
         self.roadmap_index = 0
 
         # SEND CURRENT POSE AS REFERENCE
-        rospy.loginfo("STOPPING!")
+        self.node.get_logger().info("STOPPING!")
         T_global_to_fcu = lookupTransformAsMatrix(self.odom_frame, self.fcu_frame, self.tf_listener)
 
         if do_hardstop:
@@ -1577,7 +1574,7 @@ class LocalNavigatorModule:
         # heading = transformationMatrixToHeading(T_global_to_fcu)
 
         # ref = mrs_msgs.msg.ReferenceStamped()
-        # ref.header.stamp = rospy.Time.now()
+        # ref.header.stamp = now_msg(self.node)
         # ref.header.frame_id = self.odom_frame
         # ref.reference.position.x = pos[0]
         # ref.reference.position.y = pos[1]
@@ -1943,6 +1940,8 @@ class LocalNavigatorModule:
     # # #}
 
     def getViewpointFrontierValue(self, vp):# # #{
+        if self.planning_spheremap.frontier_points is None:  # no frontiers sampled yet
+            return 0
         w = self.mapper.width
         h = self.mapper.height
         K = self.mapper.K
@@ -2025,7 +2024,7 @@ class LocalNavigatorModule:
 
         marker = Marker()
         marker.header.frame_id = frame_id
-        marker.header.stamp = rospy.Time.now()
+        marker.header.stamp = now_msg(self.node)
         marker.type = Marker.ARROW
         marker.action = Marker.ADD
         marker.id = marker_idx
@@ -2100,7 +2099,7 @@ class LocalNavigatorModule:
             marker = Marker()
             marker.header.frame_id = self.odom_frame  # Change this frame_id if necessary
             marker.ns = "roadmap"
-            marker.header.stamp = rospy.Time.now()
+            marker.header.stamp = now_msg(self.node)
             marker.type = Marker.CUBE
             marker.action = Marker.ADD
             marker.id = marker_id
@@ -2185,7 +2184,7 @@ class LocalNavigatorModule:
 
             marker = Marker()
             marker.header.frame_id = frame_id  # Change this frame_id if necessary
-            marker.header.stamp = rospy.Time.now()
+            marker.header.stamp = now_msg(self.node)
             marker.type = Marker.CUBE
             marker.action = Marker.ADD
             marker.id = marker_id
@@ -2259,7 +2258,7 @@ class LocalNavigatorModule:
            for i in range(pts.shape[0]):
                 marker = Marker()
                 marker.header.frame_id = frame_id   # Change this frame_id if necessary
-                marker.header.stamp = rospy.Time.now()
+                marker.header.stamp = now_msg(self.node)
                 marker.type = Marker.ARROW
                 marker.action = Marker.ADD
                 marker.id = marker_id
@@ -2297,7 +2296,7 @@ class LocalNavigatorModule:
         for i in range(self.exploration_goals.size):
             marker = Marker()
             marker.header.frame_id = frame_id
-            marker.header.stamp = rospy.Time.now()
+            marker.header.stamp = now_msg(self.node)
             marker.type = Marker.ARROW
             marker.action = Marker.ADD
             marker.id = i

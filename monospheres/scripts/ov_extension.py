@@ -1,16 +1,17 @@
-"exec" "`dirname $0`/../python-env/bin/python" "$0" "$@"
+#!/usr/bin/env python3
 
 # #{ imports
 
 import copy
-import rospy
+import rclpy
+from rclpy.node import Node
+from rclpy.executors import MultiThreadedExecutor
+from monospheres.ros_utils import safe_callback, get_param, now, now_msg, to_sec, time_diff_sec, own_group, sensor_qos, quaternion_matrix, TfListener, package_data_dir
 from std_srvs.srv import Empty as EmptySrv
-from std_srvs.srv import EmptyResponse as EmptySrvResponse
 import threading
 
 import heapq
 
-import rospkg
 
 from monospheres.common_spatial import *
 from monospheres.fire_slam_module import *
@@ -19,7 +20,7 @@ from monospheres.local_navigator_module import *
 from monospheres.global_navigator_module import *
 
 from sensor_msgs.msg import Image, CompressedImage, PointCloud2, CameraInfo
-import sensor_msgs.point_cloud2 as pc2
+from sensor_msgs_py import point_cloud2 as pc2
 import mrs_msgs.msg
 import std_msgs.msg
 from scipy.spatial.transform import Rotation
@@ -45,10 +46,8 @@ import io
 import copy
 
 from scipy.spatial.transform import Rotation
-import tf
 import tf2_ros
 import tf2_geometry_msgs  # for transforming geometry_msgs
-import tf.transformations as tfs
 from geometry_msgs.msg import TransformStamped
 
 
@@ -105,7 +104,8 @@ class KeyFrame:
 
 # #{ class NavNode:
 class NavNode:
-    def __init__(self):# # #{
+    def __init__(self, node):# # #{
+        self.node = node
         print("INITIALIZING")
         self.node_initialized = False
         self.node_offline = False
@@ -124,35 +124,35 @@ class NavNode:
         self.predicted_traj_mutex = threading.Lock()
 
         # SRV
-        self.save_episode_full = rospy.Service("save_episode_full", EmptySrv, self.saveEpisodeFull)
-        self.return_home_srv = rospy.Service("home", EmptySrv, self.return_home)
+        self.save_episode_full = self.node.create_service(EmptySrv, "save_episode_full", self.saveEpisodeFull, callback_group=own_group())
+        self.return_home_srv = self.node.create_service(EmptySrv, "home", self.return_home, callback_group=own_group())
 
         # TIMERS
         self.submap_builder_rate = 10
-        self.submap_builder_timer = rospy.Timer(rospy.Duration(1.0 / self.submap_builder_rate), self.submap_builder_update_iter)
+        self.submap_builder_timer = self.node.create_timer(1.0 / self.submap_builder_rate, safe_callback(self.node, self.submap_builder_update_iter), callback_group=own_group())
 
         self.planning_frequency = 5
-        self.planning_timer = rospy.Timer(rospy.Duration(1.0 / self.planning_frequency), self.planning_loop_iter)
+        self.planning_timer = self.node.create_timer(1.0 / self.planning_frequency, safe_callback(self.node, self.planning_loop_iter), callback_group=own_group())
 
         self.global_nav_frequency = 2
-        self.global_nav_timer = rospy.Timer(rospy.Duration(1.0 / self.global_nav_frequency), self.global_nav_loop_iter)
+        self.global_nav_timer = self.node.create_timer(1.0 / self.global_nav_frequency, safe_callback(self.node, self.global_nav_loop_iter), callback_group=own_group())
 
         # VIS PUB
         self.slam_points = None
 
-        self.path_planning_vis_pub = rospy.Publisher('path_planning_vis', MarkerArray, queue_size=10)
-        self.visual_similarity_vis_pub = rospy.Publisher('visual_similarity_vis', MarkerArray, queue_size=10)
-        self.unsorted_vis_pub = rospy.Publisher('unsorted_markers', MarkerArray, queue_size=10)
+        self.path_planning_vis_pub = self.node.create_publisher(MarkerArray, 'path_planning_vis', 10)
+        self.visual_similarity_vis_pub = self.node.create_publisher(MarkerArray, 'visual_similarity_vis', 10)
+        self.unsorted_vis_pub = self.node.create_publisher(MarkerArray, 'unsorted_markers', 10)
 
-        self.marker_pub = rospy.Publisher('/vo_odom', Marker, queue_size=10)
+        self.marker_pub = self.node.create_publisher(Marker, '/vo_odom', 10)
 
-        self.tf_listener = tf.TransformListener()
+        self.tf_listener = TfListener(self.node)
 
         # --Load calib
 
-        self.robot_platform = rospy.get_param("platform")
-        self.marker_scale = rospy.get_param("marker_scale")
-        self.using_external_slam_pts = rospy.get_param("local_mapping/using_external_slam_pts")
+        self.robot_platform = get_param(self.node, "platform")
+        self.marker_scale = get_param(self.node, "marker_scale")
+        self.using_external_slam_pts = get_param(self.node, "local_mapping/using_external_slam_pts")
 
         self.is_cam_info_undistorted = False
         if self.robot_platform == "hardnav_underwater":
@@ -181,20 +181,20 @@ class NavNode:
             self.T_fcu_to_imu = np.eye(4)
             self.width = 752
             self.height = 480
-            self.ov_slampoints_topic = rospy.get_param("local_mapping/slampoints_topic")
-            self.img_topic = rospy.get_param("local_mapping/img_topic")
-            self.odom_topic = '/ov_msckf/odomimu'
+            self.ov_slampoints_topic = get_param(self.node, "local_mapping/slampoints_topic")
+            self.img_topic = get_param(self.node, "local_mapping/img_topic")
+            self.odom_topic = get_param(self.node, "local_mapping/odom_topic", '/ov_msckf/odomimu')
             self.imu_frame = 'imu'
-            self.fcu_frame = rospy.get_param("local_mapping/fcu_frame")
-            self.camera_frame = rospy.get_param("local_mapping/camera_frame")
-            self.odom_frame = rospy.get_param("local_mapping/odom_frame")
+            self.fcu_frame = get_param(self.node, "local_mapping/fcu_frame")
+            self.camera_frame = get_param(self.node, "local_mapping/camera_frame")
+            self.odom_frame = get_param(self.node, "local_mapping/odom_frame")
             self.is_cam_info_undistorted = True
             # self.marker_scale = 0.5
 
             # # Get the transform
             # self.tf_listener.waitForTransform(self.fcu_frame, self.imu_frame, rospy.Time(), rospy.Duration(4.0))
             # (trans, rotation) = self.tf_listener.lookupTransform(self.fcu_frame, self.imu_frame, rospy.Time(0))
-            # rotation_matrix = tfs.quaternion_matrix(rotation)
+            # rotation_matrix = quaternion_matrix(rotation)
             # print(rotation_matrix)
             # self.T_fcu_to_imu[:3, :3] = rotation_matrix[:3,:3]
             # self.T_fcu_to_imu[:3, 3] = trans
@@ -203,12 +203,26 @@ class NavNode:
 
             # self.tf_listener.waitForTransform(self.imu_frame, self.camera_frame, rospy.Time(), rospy.Duration(4.0))
             # (trans, rotation) = self.tf_listener.lookupTransform(self.imu_frame, self.camera_frame, rospy.Time(0))
-            # rotation_matrix = tfs.quaternion_matrix(rotation)
+            # rotation_matrix = quaternion_matrix(rotation)
             # print(rotation_matrix)
             # self.T_imu_to_cam[:3, :3] = rotation_matrix[:3,:3]
             # self.T_imu_to_cam[:3, 3] = trans
             # print("T_imu_to_cam")
             # print(self.T_imu_to_cam)
+
+        elif self.robot_platform == "flightforge":
+            # FLIGHTFORGE (MRS UAV System ROS 2): pinhole camera without distortion,
+            # intrinsics and resolution are taken from the camera_info message below
+            self.K = None
+            self.T_imu_to_cam = np.eye(4)
+            self.T_fcu_to_imu = np.eye(4)
+            self.ov_slampoints_topic = get_param(self.node, "local_mapping/slampoints_topic")
+            self.img_topic = get_param(self.node, "local_mapping/img_topic")
+            self.odom_topic = get_param(self.node, "local_mapping/odom_topic")
+            self.fcu_frame = get_param(self.node, "local_mapping/fcu_frame")
+            self.camera_frame = get_param(self.node, "local_mapping/camera_frame")
+            self.odom_frame = get_param(self.node, "local_mapping/odom_frame")
+            self.is_cam_info_undistorted = True
 
         elif self.robot_platform == "tello":
         # TELLo (imu = fcu)
@@ -235,9 +249,9 @@ class NavNode:
         print("WAITING FOR TRANSFORM BETWEEN FCU AND CAMERA")
         print(self.fcu_frame)
         print(self.camera_frame)
-        self.tf_listener.waitForTransform(self.fcu_frame, self.camera_frame, rospy.Time(), rospy.Duration(4.0))
-        (trans, rotation) = self.tf_listener.lookupTransform(self.fcu_frame, self.camera_frame, rospy.Time(0))
-        rotation_matrix = tfs.quaternion_matrix(rotation)
+        self.tf_listener.waitForTransform(self.fcu_frame, self.camera_frame, timeout_sec=4.0)
+        (trans, rotation) = self.tf_listener.lookupTransform(self.fcu_frame, self.camera_frame)
+        rotation_matrix = quaternion_matrix(rotation)
         self.T_imu_to_cam[:3, :3] = rotation_matrix[:3,:3]
         self.T_imu_to_cam[:3, 3] = trans
         # self.T_imu_to_cam = np.linalg.inv(self.T_imu_to_cam)
@@ -246,16 +260,25 @@ class NavNode:
 
         # WAIT FOR CAMERA INFO
         self.camera_info = None
-        self.camera_info_topic = rospy.get_param("local_mapping/camera_info_topic")
-        self.sub_camera_info = rospy.Subscriber(self.camera_info_topic, CameraInfo, self.camera_info_callback, queue_size=10)
+        self.camera_info_topic = get_param(self.node, "local_mapping/camera_info_topic")
+        self.sub_camera_info = self.node.create_subscription(CameraInfo, self.camera_info_topic, safe_callback(self.node, self.camera_info_callback), sensor_qos(10), callback_group=own_group())
         print("WAITING FOR CAMERA INFO")
         while self.camera_info is None:
             print("WAITING FOR CAMERA INFO AT TOPIC " + self.camera_info_topic)
             time.sleep(0.1)
 
+        if self.K is None:
+            self.K = np.reshape(np.array(self.camera_info.k), (3, 3))
+            self.width = self.camera_info.width
+            self.height = self.camera_info.height
+            self.P = np.zeros((3, 4))
+            self.P[:3, :3] = self.K
+            print("CAMERA INTRINSICS FROM CAMERA INFO: %dx%d" % (self.width, self.height))
+            print(self.K)
+
         # --INITIALIZE MODULES
         # FIRESLAM
-        self.fire_slam_module = FireSLAMModule(self.width, self.height, self.K, self.camera_frame, self.odom_frame, self.tf_listener, self.camera_info)
+        self.fire_slam_module = FireSLAMModule(self.node, self.width, self.height, self.K, self.camera_frame, self.odom_frame, self.tf_listener, self.camera_info)
 
         # SUBMAP BUILDER
         self.smap_copy = None
@@ -263,11 +286,11 @@ class NavNode:
         self.submap_builder_input_pcl = None
         self.submap_builder_input_point_ids = None
 
-        self.submap_builder_module = SubmapBuilderModule(self.width, self.height, self.K, self.camera_frame, self.odom_frame,self.fcu_frame, self.tf_listener, self.T_imu_to_cam, self.T_fcu_to_imu, self.camera_info, self.is_cam_info_undistorted)
+        self.submap_builder_module = SubmapBuilderModule(self.node, self.width, self.height, self.K, self.camera_frame, self.odom_frame,self.fcu_frame, self.tf_listener, self.T_imu_to_cam, self.T_fcu_to_imu, self.camera_info, self.is_cam_info_undistorted)
 
         # LOCAL NAVIGATOR
-        ptraj_topic = rospy.get_param("local_nav/predicted_trajectory_topic")
-        output_path_topic = rospy.get_param("local_nav/output_path_topic")
+        ptraj_topic = get_param(self.node, "local_nav/predicted_trajectory_topic")
+        output_path_topic = get_param(self.node, "local_nav/output_path_topic")
         self.local_navigator_module = LocalNavigatorModule(self.submap_builder_module, ptraj_topic, output_path_topic)
 
         # GLOBAL NAVIGATOR
@@ -275,14 +298,16 @@ class NavNode:
 
         # --INIT SUBSCRIBERS
         # CAMERA
-        # self.sub_cam = rospy.Subscriber(self.img_topic, Image, self.image_callback, queue_size=10)
-        self.sub_cam = rospy.Subscriber(self.img_topic, CompressedImage, self.image_callback, queue_size=10)
+        # self.sub_cam = self.node.create_subscription(Image, self.img_topic, safe_callback(self.node, self.image_callback), sensor_qos(10), callback_group=own_group())
+        # compressed or raw image, decided by the topic name (FlightForge publishes raw rgb/image_raw)
+        img_msg_type = CompressedImage if self.img_topic.rstrip('/').endswith('compressed') else Image
+        self.sub_cam = self.node.create_subscription(img_msg_type, self.img_topic, safe_callback(self.node, self.image_callback), sensor_qos(10), callback_group=own_group())
         if self.using_external_slam_pts:
-            self.sub_slam_pts = rospy.Subscriber(self.ov_slampoints_topic, PointCloud2, self.slam_points_callback, queue_size=10)
+            self.sub_slam_pts = self.node.create_subscription(PointCloud2, self.ov_slampoints_topic, safe_callback(self.node, self.slam_points_callback), sensor_qos(10), callback_group=own_group())
 
         self.odom_buffer = []
         self.odom_buffer_maxlen = 1000
-        self.sub_odom = rospy.Subscriber(self.odom_topic, Odometry, self.odometry_callback, queue_size=10000)
+        self.sub_odom = self.node.create_subscription(Odometry, self.odom_topic, safe_callback(self.node, self.odometry_callback), sensor_qos(10000), callback_group=own_group())
         
         self.n_plan_iters_without_smap_update = 0
         self.n_smap_iters_since_last_planning = 0
@@ -290,15 +315,15 @@ class NavNode:
         # # #}
 
     # --SERVICE CALLBACKS
-    def return_home(self, req):# # #{
+    def return_home(self, req=None, resp=None):# # #{
         print("RETURN HOME SRV")
         self.state = 'home'
-        return EmptySrvResponse()# # #}
+        return EmptySrv.Response()# # #}
 
     # -- MEMORY MANAGING
-    def saveEpisodeFull(self, req):# # #{
+    def saveEpisodeFull(self, req=None, resp=None):# # #{
         self.submap_builder_module.saveEpisodeFull(None)
-        return EmptySrvResponse()# # #}
+        return EmptySrv.Response()# # #}
 
     # --SUBSCRIBE CALLBACKS
 
@@ -308,7 +333,7 @@ class NavNode:
         print("OBTAINED CAMERA INFO")
         self.camera_info = msg
 
-    def planning_loop_iter(self, event):# # #{
+    def planning_loop_iter(self, event=None):# # #{
         print("PLANNING ITER")
         if not self.node_initialized:
             return
@@ -339,7 +364,7 @@ class NavNode:
         self.n_smap_iters_since_last_planning = 0
     # # #}
 
-    def global_nav_loop_iter(self, event):
+    def global_nav_loop_iter(self, event=None):
         print("GLOBAL PLANNING ITER")
         if not self.node_initialized:
             return
@@ -399,12 +424,12 @@ class NavNode:
 
         # print("SMAP ITER")
         self.submap_builder_module.camera_update_iter(pcl_msg, points_info) 
-        rospy.loginfo("copying spheremap")
+        self.node.get_logger().info("copying spheremap")
         interm_time2 = time.time()
         self.smap_copy = copy.deepcopy(self.submap_builder_module.spheremap)
         copy_dt = time.time() - interm_time2
         print("SMAP COPY DT: " + str((copy_dt) * 1000) +  " ms")
-        rospy.loginfo("done copying spheremap")
+        self.node.get_logger().info("done copying spheremap")
 
         # print("SMAP ITER DONE")
         self.n_plan_iters_without_smap_update = 0
@@ -487,11 +512,11 @@ class NavNode:
         besttimedif = 0
         for msg in self.odom_buffer:
             # print(msg.header.stamp.to_sec())
-            tdif2 = np.abs((msg.header.stamp - stamp).to_nsec())
+            tdif2 = np.abs(time_diff_sec(msg.header.stamp, stamp))
             if bestmsg == None or tdif2 < besttimedif:
                 bestmsg = msg
                 besttimedif = tdif2
-        final_tdif = (msg.header.stamp - stamp).to_sec()
+        final_tdif = time_diff_sec(msg.header.stamp, stamp)
         # print("TARGET")
         # print(stamp)
         # print("FOUND")
@@ -502,8 +527,45 @@ class NavNode:
 
 # #}
 
+def main(args=None):
+    rclpy.init(args=args)
+    # One node for the whole pipeline. Parameters are taken from the YAML overrides as-is
+    # (types from the YAML, no explicit declarations), see monospheres.ros_utils.get_param.
+    node = Node('ultra_navigation_node',
+                allow_undeclared_parameters=True,
+                automatically_declare_parameters_from_overrides=True)
+
+    # Spin in a background thread from the start: NavNode's constructor blocks on TF and on the
+    # camera info message, which need the executor running (rospy did this implicitly).
+    # Every timer/subscription has its own mutually exclusive callback group, so they run
+    # concurrently as the rospy threads did.
+    executor = MultiThreadedExecutor()
+    executor.add_node(node)
+    spin_error = []
+
+    def spin():
+        try:
+            executor.spin()
+        except BaseException as e:  # an exception in any callback stops the executor
+            spin_error.append(e)
+            raise
+
+    spin_thread = threading.Thread(target=spin, daemon=True)
+    spin_thread.start()
+
+    try:
+        nav_node = NavNode(node)
+        spin_thread.join()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        executor.shutdown()
+        node.destroy_node()
+        if rclpy.ok():
+            rclpy.shutdown()
+    if spin_error:
+        sys.exit(1)
+
+
 if __name__ == '__main__':
-    rospy.init_node('ultra_navigation_node')
-    optical_flow_node = NavNode()
-    rospy.spin()
-    cv2.destroyAllWindows()
+    main()

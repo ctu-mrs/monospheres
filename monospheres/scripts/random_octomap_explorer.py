@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
 
-import rospy
+import rclpy
+import rclpy.duration
+import rclpy.time
+from rclpy.node import Node
 import random
 import math
 from visualization_msgs.msg import MarkerArray
 from geometry_msgs.msg import Point, PointStamped
 from std_msgs.msg import String
-from mrs_msgs.srv import Vec4, Vec4Request
+from mrs_msgs.srv import Vec4
 import numpy as np
 # mrs_modules_msgs/OctomapPlannerDiagnostics
 from mrs_modules_msgs.msg import OctomapPlannerDiagnostics
@@ -15,38 +18,41 @@ import tf2_ros
 import tf2_geometry_msgs
 # import geometry_msgs.msg
 
-class RandomExplorer:
+class RandomExplorer(Node):
     def __init__(self):
-        rospy.init_node("random_explorer")
+        super().__init__("random_explorer",
+                         allow_undeclared_parameters=True,
+                         automatically_declare_parameters_from_overrides=True)
 
         # Subscribers
-        self.marker_sub = rospy.Subscriber("/uav1/octomap_global_vis/free_cells_vis_array", MarkerArray, self.marker_callback)
-        self.nav_diagnostics_sub = rospy.Subscriber("/uav1/octomap_planner/diagnostics", OctomapPlannerDiagnostics, self.nav_diagnostics_callback)
+        self.marker_sub = self.create_subscription(MarkerArray, self._param("free_cells_topic", "/uav1/octomap_global_vis/free_cells_vis_array"), self.marker_callback, 10)
+        self.nav_diagnostics_sub = self.create_subscription(OctomapPlannerDiagnostics, self._param("planner_diagnostics_topic", "/uav1/octomap_planner/diagnostics"), self.nav_diagnostics_callback, 10)
 
         # Service Client for /goto
-        self.gotosrv_name = "/uav1/octomap_planner/goto"
-        self.goto_client = rospy.ServiceProxy(self.gotosrv_name, Vec4)
+        self.gotosrv_name = self._param("goto_service", "/uav1/octomap_planner/goto")
+        self.goto_client = self.create_client(Vec4, self.gotosrv_name)
+        self.goto_future = None
 
         # Timer for periodic exploration
-        self.timer = rospy.Timer(rospy.Duration(1.0), self.explore)
+        self.timer = self.create_timer(1.0, self.explore)
 
         # Storage
         # self.free_space_markers = []
         self.free_space_markers_pts = []
         self.nav_status = "IDLE"
         self.goal_active = False
-        self.last_sent_goal_time = rospy.Time.now().to_sec()
+        self.last_sent_goal_time = self._now_sec()
 
         # Exploration bounds
         self.local_random_sampling_dist = 20
         self.goal_timeout = 20
-        self.safety_area_enabled = rospy.get_param("exploration_safety_area/enabled")
-        self.safety_area_x_min = rospy.get_param("exploration_safety_area/x_min")
-        self.safety_area_x_max = rospy.get_param("exploration_safety_area/x_max")
-        self.safety_area_y_min = rospy.get_param("exploration_safety_area/y_min")
-        self.safety_area_y_max = rospy.get_param("exploration_safety_area/y_max")
-        self.safety_area_z_min = rospy.get_param("exploration_safety_area/z_min")
-        self.safety_area_z_max = rospy.get_param("exploration_safety_area/z_max")
+        self.safety_area_enabled = self._param("exploration_safety_area/enabled")
+        self.safety_area_x_min = self._param("exploration_safety_area/x_min")
+        self.safety_area_x_max = self._param("exploration_safety_area/x_max")
+        self.safety_area_y_min = self._param("exploration_safety_area/y_min")
+        self.safety_area_y_max = self._param("exploration_safety_area/y_max")
+        self.safety_area_z_min = self._param("exploration_safety_area/z_min")
+        self.safety_area_z_max = self._param("exploration_safety_area/z_max")
 
 
         boundmax = 100
@@ -57,38 +63,50 @@ class RandomExplorer:
         self.free_threshold = 1  # Distance to consider near a free space marker
         # self.world_frame = "uav1/world_origin"
         # self.world_frame = "uav1/vio_origin"
-        self.world_frame = "global"
-        self.octomap_frame = "uav1/vio_origin"
+        self.world_frame = self._param("world_frame", "global")
+        self.octomap_frame = self._param("octomap_frame", "uav1/vio_origin")
         self.markers_frame = "uav1/vio_origin"
 
-        rospy.loginfo("Random Explorer node started.")
+        self.get_logger().info("Random Explorer node started.")
 
 
         self.tf_buffer = tf2_ros.Buffer()
-        self.tf_listener = tf2_ros.TransformListener(self.tf_buffer)
+        self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
+
+    def _param(self, name, default=None):
+        """rospy.get_param equivalent ('a/b' -> 'a.b'); raises KeyError if missing and no default."""
+        ros2_name = name.replace('/', '.')
+        if self.has_parameter(ros2_name) and self.get_parameter(ros2_name).value is not None:
+            return self.get_parameter(ros2_name).value
+        if default is None:
+            raise KeyError("parameter '%s' is not set" % name)
+        return default
+
+    def _now_sec(self):
+        return self.get_clock().now().nanoseconds * 1e-9
 
     def transform_point(self, point, from_frame, to_frame):
         stampoint = PointStamped()
         stampoint.point = point
         stampoint.header.frame_id = from_frame
-        stampoint.header.stamp = rospy.Time.now()
+        stampoint.header.stamp = self.get_clock().now().to_msg()
 
         try:
             # Wait for transform to become available
-            transform = self.tf_buffer.lookup_transform(to_frame, from_frame, rospy.Time(0), rospy.Duration(1.0))
+            transform = self.tf_buffer.lookup_transform(to_frame, from_frame, rclpy.time.Time(), timeout=rclpy.duration.Duration(seconds=1.0))
             
             # Transform the point
             transformed_point = tf2_geometry_msgs.do_transform_point(stampoint, transform)
             return transformed_point.point
     
         except (tf2_ros.LookupException, tf2_ros.ConnectivityException, tf2_ros.ExtrapolationException) as e:
-            rospy.logerr(f"Transform error: {e}")
+            self.get_logger().error(f"Transform error: {e}")
             return None
 
     def get_fcu_world_position(self):
         try:
             # Lookup the transformation from world_origin to fcu
-            transform = self.tf_buffer.lookup_transform(self.world_frame, 'uav1/fcu', rospy.Time(0), rospy.Duration(1.0))
+            transform = self.tf_buffer.lookup_transform(self.world_frame, 'uav1/fcu', rclpy.time.Time(), timeout=rclpy.duration.Duration(seconds=1.0))
     
             # Extract position
             position = transform.transform.translation
@@ -96,7 +114,7 @@ class RandomExplorer:
     
             return position
         except (tf2_ros.LookupException, tf2_ros.ConnectivityException, tf2_ros.ExtrapolationException) as e:
-            rospy.logerr(f"Could not get transform: {e}")
+            self.get_logger().error(f"Could not get transform: {e}")
             return None
 
 
@@ -109,7 +127,7 @@ class RandomExplorer:
         for i in range(len(msg.markers)):
             # print(len(msg.markers[i].points))
             self.free_space_markers_pts += msg.markers[i].points
-        rospy.loginfo("Received %d free-space marker pts", len(self.free_space_markers_pts))
+        self.get_logger().info("Received %d free-space marker pts" % len(self.free_space_markers_pts))
 
     def nav_diagnostics_callback(self, msg):
         """Checks if the robot has reached its goal or failed."""
@@ -125,12 +143,12 @@ class RandomExplorer:
         #     rospy.loginfo("Goal %s. Selecting a new goal...", self.nav_status)
         #     self.goal_active = False
 
-    def explore(self, event):
+    def explore(self):
         """Selects a random goal and sends it to the robot if no goal is active."""
         if not self.free_space_markers_pts:
             return
 
-        time_since_last_sent = rospy.Time.now().to_sec() - self.last_sent_goal_time
+        time_since_last_sent = self._now_sec() - self.last_sent_goal_time
 
         if self.goal_active and time_since_last_sent < self.goal_timeout:
             return
@@ -141,27 +159,38 @@ class RandomExplorer:
             return
 
         if not self.is_inside_target_area(robot_pos.x, robot_pos.y, robot_pos.z):
-            rospy.logwarn_throttle(1, "Robot is outside exploration area!")
+            self.get_logger().warn("Robot is outside exploration area!", throttle_duration_sec=1.0)
 
         heading = np.random.rand() * 2 * 3.14159
         goal = self.sample_free_point(robot_pos)
 
         if goal:
-            rospy.loginfo("Trying to send goal")
-            rospy.loginfo("Goal in orig_frame: (%.2f, %.2f, %.2f)", goal.x, goal.y, goal.z)
+            self.get_logger().info("Trying to send goal")
+            self.get_logger().info("Goal in orig_frame: (%.2f, %.2f, %.2f)" % (goal.x, goal.y, goal.z))
             transformed_goal = self.transform_point(goal, self.world_frame , self.octomap_frame)
-            try:
-                rospy.wait_for_service(self.gotosrv_name, timeout=2.0)
-                set_transformed_goal = Vec4Request(goal=[transformed_goal.x, transformed_goal.y, transformed_goal.z, heading])
-                response = self.goto_client(set_transformed_goal)
-                if response.success:
-                    rospy.loginfo("Sent transformed_goal: (%.2f, %.2f, %.2f)", transformed_goal.x, transformed_goal.y, transformed_goal.z)
-                    self.goal_active = True
-                    self.last_sent_goal_time = rospy.Time.now().to_sec()
-                else:
-                    rospy.warn("Failed to send goal.")
-            except rospy.ServiceException as e:
-                rospy.logerr("Service call failed: %s", str(e))
+            if transformed_goal is None:
+                return
+            if self.goto_future is not None and not self.goto_future.done():
+                return
+            if not self.goto_client.wait_for_service(timeout_sec=2.0):
+                self.get_logger().error("Service %s not available" % self.gotosrv_name)
+                return
+            req = Vec4.Request(goal=[transformed_goal.x, transformed_goal.y, transformed_goal.z, heading])
+            self.goto_future = self.goto_client.call_async(req)
+            self.goto_future.add_done_callback(lambda f, g=transformed_goal: self.goto_done(f, g))
+
+    def goto_done(self, future, transformed_goal):
+        try:
+            response = future.result()
+        except Exception as e:
+            self.get_logger().error("Service call failed: %s" % str(e))
+            return
+        if response.success:
+            self.get_logger().info("Sent transformed_goal: (%.2f, %.2f, %.2f)" % (transformed_goal.x, transformed_goal.y, transformed_goal.z))
+            self.goal_active = True
+            self.last_sent_goal_time = self._now_sec()
+        else:
+            self.get_logger().warn("Failed to send goal.")
 
     def is_inside_target_area(self, x, y, z):
         if x > self.safety_area_x_max or x < self.safety_area_x_min:
@@ -202,7 +231,7 @@ class RandomExplorer:
             if True:
                 goal = Point(x=x, y=y, z=z)
                 return goal
-        rospy.logwarn("Could not find a free random point.")
+        self.get_logger().warn("Could not find a free random point.")
         return None
 
     def is_near_free_marker(self, x, y, z, pt_frame):
@@ -224,9 +253,18 @@ class RandomExplorer:
         # rospy.loginfo("best dist: " + str(mindist))
         return False
 
-if __name__ == "__main__":
+def main(args=None):
+    rclpy.init(args=args)
+    node = RandomExplorer()
     try:
-        RandomExplorer()
-        rospy.spin()
-    except rospy.ROSInterruptException:
+        rclpy.spin(node)
+    except KeyboardInterrupt:
         pass
+    finally:
+        node.destroy_node()
+        if rclpy.ok():
+            rclpy.shutdown()
+
+
+if __name__ == "__main__":
+    main()

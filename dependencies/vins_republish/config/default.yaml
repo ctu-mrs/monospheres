@@ -1,3 +1,0 @@
-rate_limiter:
-  enabled: true
-  max_rate: 100.0 # [Hz]

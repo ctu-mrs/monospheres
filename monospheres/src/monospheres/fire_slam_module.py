@@ -1,10 +1,10 @@
 #!/usr/bin/env python
 
 # imports# # #{
-import rospy
+from monospheres.ros_utils import safe_callback, get_param, now, now_msg, to_sec, time_diff_sec, own_group, sensor_qos, quaternion_matrix, TfListener, package_data_dir
 # from sensor_msgs.msg import Image
 from sensor_msgs.msg import Image, CompressedImage, PointCloud2, PointField
-import sensor_msgs.point_cloud2 as pc2
+from sensor_msgs_py import point_cloud2 as pc2
 from std_msgs.msg import Header
 from scipy.spatial.transform import Rotation
 import scipy
@@ -12,7 +12,6 @@ from scipy.spatial import Delaunay
 from scipy.spatial import ConvexHull
 # import pcl
 
-import tf.transformations as tfs
 
 import trimesh
 
@@ -32,7 +31,6 @@ import io
 import copy
 
 from scipy.spatial.transform import Rotation
-import tf
 import tf2_ros
 import tf2_geometry_msgs  # for transforming geometry_msgs
 from geometry_msgs.msg import TransformStamped
@@ -90,13 +88,14 @@ class KeyFrame:# # #{
 class FireSLAMModule:
     # CORE
 
-    def __init__(self, w, h, K, camera_frame_id, odom_orig_frame_id, tf_listener, camera_info = None, image_sub_topic=None, standalone_mode = False ):# # #{
+    def __init__(self, node, w, h, K, camera_frame_id, odom_orig_frame_id, tf_listener, camera_info = None, image_sub_topic=None, standalone_mode = False ):# # #{
+        self.node = node
 
         if not camera_info is None:
             self.width = camera_info.width
             self.height = camera_info.height
-            self.cam_info_K = np.reshape(camera_info.K, (3,3))
-            self.distortion_coeffs =  np.array(camera_info.D)
+            self.cam_info_K = np.reshape(camera_info.k, (3,3))
+            self.distortion_coeffs =  np.array(camera_info.d)
             # self.distortion_coeffs[0] *= 1
             # self.distortion_coeffs[1] *= 1
             # self.distortion_coeffs[2] *= 3
@@ -157,27 +156,27 @@ class FireSLAMModule:
         self.active_2d_points_ids = []
 
         self.slam_points = None
-        self.slam_pcl_pub = rospy.Publisher('extended_slam_points', PointCloud2, queue_size=10)
+        self.slam_pcl_pub = self.node.create_publisher(PointCloud2, 'extended_slam_points', 10)
 
-        self.slam_traj_vis_pub = rospy.Publisher('fire_slam_trajectory_vis', MarkerArray, queue_size=1)
-        self.triang_vis_pub = rospy.Publisher('triang_features_img', Image, queue_size=1)
-        self.track_vis_pub = rospy.Publisher('tracked_features_img', Image, queue_size=1)
-        self.depth_pub = rospy.Publisher('estim_depth_img', Image, queue_size=1)
-        self.marker_pub = rospy.Publisher('/vo_odom', Marker, queue_size=10)
-        self.kp_pcl_pub = rospy.Publisher('tracked_features_space', PointCloud, queue_size=10)
-        self.kp_pcl_pub_invdepth = rospy.Publisher('tracked_features_space_invdepth', Marker, queue_size=10)
+        self.slam_traj_vis_pub = self.node.create_publisher(MarkerArray, 'fire_slam_trajectory_vis', 1)
+        self.triang_vis_pub = self.node.create_publisher(Image, 'triang_features_img', 1)
+        self.track_vis_pub = self.node.create_publisher(Image, 'tracked_features_img', 1)
+        self.depth_pub = self.node.create_publisher(Image, 'estim_depth_img', 1)
+        self.marker_pub = self.node.create_publisher(Marker, '/vo_odom', 10)
+        self.kp_pcl_pub = self.node.create_publisher(PointCloud, 'tracked_features_space', 10)
+        self.kp_pcl_pub_invdepth = self.node.create_publisher(Marker, 'tracked_features_space_invdepth', 10)
 
-        self.keyframes_marker_pub = rospy.Publisher('/keyframe_vis', MarkerArray, queue_size=10)
+        self.keyframes_marker_pub = self.node.create_publisher(MarkerArray, '/keyframe_vis', 10)
 
 
-        self.tf_broadcaster = tf.TransformBroadcaster()
+        self.tf_broadcaster = tf2_ros.TransformBroadcaster(self.node)
 
         self.orb = cv2.ORB_create(nfeatures=3000)
 
 
         # SUBSCRIBE CAM
         if self.standalone_mode:
-            self.sub_cam = rospy.Subscriber(self.image_sub_topic, Image, self.image_callback, queue_size=10)
+            self.sub_cam = self.node.create_subscription(Image, self.image_sub_topic, safe_callback(self.node, self.image_callback), sensor_qos(10), callback_group=own_group())
 
         self.imu_to_cam_T = np.array( [[0, -1, 0, 0], [0, 0, -1, 0], [1, 0, 0, 0], [0.0, 0.0, 0.0, 1.0]])
         print("IMUTOCAM", self.imu_to_cam_T)
@@ -192,14 +191,14 @@ class FireSLAMModule:
         # self.odom_orig_frame_id = "uav1/fixed_origin"
 
         if self.standalone_mode:
-            self.tf_listener = tf.TransformListener()
+            self.tf_listener = TfListener(self.node)
         else:
             self.tf_listener = tf_listener
 
         # LOAD PARAMS
-        self.kf_dist_thr = rospy.get_param("local_mapping/keyframe_dist_thr")
-        self.marker_scale = rospy.get_param("marker_scale")
-        self.slam_filtering_enabled = rospy.get_param("local_mapping/slam_filtering_enabled")
+        self.kf_dist_thr = get_param(self.node, "local_mapping/keyframe_dist_thr")
+        self.marker_scale = get_param(self.node, "marker_scale")
+        self.slam_filtering_enabled = get_param(self.node, "local_mapping/slam_filtering_enabled")
 
         # NEW
         self.new_frame = None
@@ -392,8 +391,8 @@ class FireSLAMModule:
         self.has_new_pcl_data  = False
 
         # GET CURRENT ODOM POSE
-        (trans, rotation) = self.tf_listener.lookupTransform(self.odom_orig_frame_id , self.camera_frame_id, rospy.Time(0))
-        rotation_matrix = tfs.quaternion_matrix(rotation)
+        (trans, rotation) = self.tf_listener.lookupTransform(self.odom_orig_frame_id , self.camera_frame_id)
+        rotation_matrix = quaternion_matrix(rotation)
         T_odom = np.eye(4)
         T_odom[:3, :3] = rotation_matrix[:3,:3]
         T_odom[:3, 3] = trans
@@ -436,7 +435,7 @@ class FireSLAMModule:
 
         # self.track_vis_pub.publish(self.bridge.cv2_to_imgmsg(dst, "bgr8"))
 
-        comp_start_time = rospy.get_rostime()
+        comp_start_time = now(self.node)
 
         # SHIFT LAST AND NEW
         self.last_img_stamp = self.new_img_stamp 
@@ -504,10 +503,10 @@ class FireSLAMModule:
 
         # CHECK IF SHOULD ADD KEYFRAME FOR TRIANGULATION OF POINTS
         # TODO - and prev keyframe parallax condition
-        timedist_to_img = (rospy.get_rostime() - self.new_img_stamp).to_sec()
+        timedist_to_img = time_diff_sec(now(self.node), self.new_img_stamp)
         # print("TIMEDIST IMG: " + str(timedist_to_img))
         if len(self.keyframes) > 0:
-            time_since_last_keyframe = (self.new_img_stamp - self.keyframes[-1].img_timestamp).to_sec()
+            time_since_last_keyframe = time_diff_sec(self.new_img_stamp, self.keyframes[-1].img_timestamp)
         # print("TIME SINCE LAST KF:" + str(time_since_last_keyframe ))
 
 
@@ -760,11 +759,11 @@ class FireSLAMModule:
         # point_cloud.header.frame_id = 'uav1/fcu'  # Set the frame ID according to your robot's configuration
         # point_cloud.header.frame_id = self.camera_frame_id  # Set the frame ID according to your robot's configuration
 
-        point_cloud.header.stamp = rospy.Time.now()
+        point_cloud.header.stamp = now_msg(self.node)
         point_cloud.header.frame_id = self.odom_orig_frame_id  # Set the frame ID according to your robot's configuration
 
-        (trans, rotation) = self.tf_listener.lookupTransform(self.odom_orig_frame_id, self.camera_frame_id, rospy.Time(0))
-        rotation_matrix = tfs.quaternion_matrix(rotation)
+        (trans, rotation) = self.tf_listener.lookupTransform(self.odom_orig_frame_id, self.camera_frame_id)
+        rotation_matrix = quaternion_matrix(rotation)
         T_odom = np.eye(4)
         T_odom[:3, :3] = rotation_matrix[:3,:3]
         T_odom[:3, 3] = trans
@@ -845,12 +844,12 @@ class FireSLAMModule:
 
 
         header = Header()
-        header.stamp = rospy.Time.now()
+        header.stamp = now_msg(self.node)
         header.frame_id = self.odom_orig_frame_id  # Set the frame ID according to your robot's configuration
 
-        fields = [PointField('x', 0, PointField.FLOAT32, 1),
-          PointField('y', 4, PointField.FLOAT32, 1),
-          PointField('z', 8, PointField.FLOAT32, 1),
+        fields = [PointField(name='x', offset=0, datatype=PointField.FLOAT32, count=1),
+          PointField(name='y', offset=4, datatype=PointField.FLOAT32, count=1),
+          PointField(name='z', offset=8, datatype=PointField.FLOAT32, count=1),
           # PointField('rgb', 12, PointField.UINT32, 1),
           # PointField('rgba', 12, PointField.UINT32, 1),
           ]
@@ -1020,7 +1019,7 @@ class FireSLAMModule:
 
     def publish_pose_msg(self):# # #{
         tf_msg = TransformStamped()
-        tf_msg.header.stamp = rospy.Time.now()
+        tf_msg.header.stamp = now_msg(self.node)
         tf_msg.header.frame_id = "mission_origin"
         tf_msg.child_frame_id = "cam_odom"
 
@@ -1040,7 +1039,7 @@ class FireSLAMModule:
 
 
         # Broadcast the TF transform
-        self.tf_broadcaster.sendTransformMessage(tf_msg)
+        self.tf_broadcaster.sendTransform(tf_msg)
     # # #}
 
     def visualize_keypoints(self, img, kp):# # #{
@@ -1062,7 +1061,7 @@ class FireSLAMModule:
         for i in range(len(poses)):
             marker = Marker()
             marker.header.frame_id = frame_id  # Change this frame_id if necessary
-            marker.header.stamp = rospy.Time.now()
+            marker.header.stamp = now_msg(self.node)
             marker.type = Marker.ARROW
             marker.action = Marker.ADD
             marker.id = marker_id
@@ -1101,7 +1100,7 @@ class FireSLAMModule:
         for i in range(len(self.keyframes)):
             marker = Marker()
             marker.header.frame_id = self.odom_orig_frame_id  # Change this frame_id if necessary
-            marker.header.stamp = rospy.Time.now()
+            marker.header.stamp = now_msg(self.node)
             marker.type = Marker.ARROW
             marker.action = Marker.ADD
             marker.id = marker_id
@@ -1139,7 +1138,7 @@ class FireSLAMModule:
         for i in range(len(self.keyframes)):
             marker = Marker()
             marker.header.frame_id = self.odom_orig_frame_id  # Change this frame_id if necessary
-            marker.header.stamp = rospy.Time.now()
+            marker.header.stamp = now_msg(self.node)
             marker.type = Marker.ARROW
             marker.action = Marker.ADD
             marker.id = marker_id

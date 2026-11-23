@@ -1,17 +1,16 @@
-import copy# # #{
-import rospy
+import copy
+import os# # #{
+from monospheres.ros_utils import get_param, now, now_msg, to_sec, time_diff_sec, own_group, sensor_qos, quaternion_matrix, TfListener, package_data_dir
 from std_srvs.srv import Empty as EmptySrv
-from std_srvs.srv import EmptyResponse as EmptySrvResponse
 import threading
 
 import heapq
 
-import rospkg
 
 from monospheres.common_spatial import *
 
 from sensor_msgs.msg import Image, CompressedImage, PointCloud2
-import sensor_msgs.point_cloud2 as pc2
+from sensor_msgs_py import point_cloud2 as pc2
 import mrs_msgs.msg
 import std_msgs.msg
 from scipy.spatial.transform import Rotation
@@ -20,7 +19,6 @@ from scipy.spatial import Delaunay
 from scipy.spatial import ConvexHull
 from shapely import geometry
 
-import pyembree
 import trimesh
 
 from nav_msgs.msg import Odometry
@@ -40,10 +38,8 @@ import io
 import copy
 
 from scipy.spatial.transform import Rotation
-import tf
 import tf2_ros
 import tf2_geometry_msgs  # for transforming geometry_msgs
-import tf.transformations as tfs
 from geometry_msgs.msg import TransformStamped
 
 from numba import njit, jit
@@ -56,7 +52,8 @@ import sys
 # # #}
 
 class SubmapBuilderModule:
-    def __init__(self, w, h, K, camera_frame_id, odom_orig_frame_id, fcu_frame, tf_listener, T_imu_to_cam, T_fcu_to_imu, camera_info = None, is_cam_info_undistorted = False):# # #{
+    def __init__(self, node, w, h, K, camera_frame_id, odom_orig_frame_id, fcu_frame, tf_listener, T_imu_to_cam, T_fcu_to_imu, camera_info = None, is_cam_info_undistorted = False):# # #{
+        self.node = node
         self.latest_camera_image = None
 
         self.do_distbased_fusion = True
@@ -71,13 +68,18 @@ class SubmapBuilderModule:
             if not is_cam_info_undistorted:
                 self.width = camera_info.width
                 self.height = camera_info.height
-                self.cam_info_K = np.reshape(camera_info.K, (3,3))
-                self.distortion_coeffs =  np.array(camera_info.D)[:4]
+                self.cam_info_K = np.reshape(camera_info.k, (3,3))
+                self.distortion_coeffs =  np.array(camera_info.d)[:4]
 
                 self.new_K = cv2.fisheye.estimateNewCameraMatrixForUndistortRectify(self.cam_info_K, self.distortion_coeffs, (w, h), np.eye(3), balance=1, new_size=(w, h), fov_scale=1)
 
         # TODO - something like " if self.using_disorted_camera and not self.should_undistort"
         self.distortion_coeffs = np.array([0.019265981371039506, 0.0011428473998276235, -0.0003811659324868097, 6.340084698783884e-05])
+        # The hardcoded coefficients above are for the (fisheye) bluefox camera used in the RA-L experiments.
+        # Pinhole cameras (e.g. FlightForge) must disable this, otherwise the equidistant fisheye projection
+        # is used for all projections of obstacle points.
+        if not get_param(node, "local_mapping/use_fisheye_distortion", True):
+            self.distortion_coeffs = None
         # self.distortion_coeffs = np.array([0.015,-0.020,0.017,-0.003])
         # self.distortion_coeffs = np.array([0.037,-0.029,0.019,-0.004])
 
@@ -103,7 +105,7 @@ class SubmapBuilderModule:
 
         self.mchunk = CoherentSpatialMemoryChunk()
 
-        # self.testing_mchunk_filename = rospy.get_param("global_nav/testing_mchunk_filename")
+        # self.testing_mchunk_filename = get_param(self.node, "global_nav/testing_mchunk_filename")
         # mchunk_filepath = rospkg.RosPack().get_path('monospheres') + "/memories/" + self.testing_mchunk_filename
         # self.mchunk = CoherentSpatialMemoryChunk.load(mchunk_filepath)
 
@@ -114,32 +116,32 @@ class SubmapBuilderModule:
         self.predicted_traj_mutex = threading.Lock()
 
         # SRV
-        # self.vocab_srv = rospy.Service("save_vocabulary", EmptySrv, self.saveCurrentVisualDatabaseToVocabFile)
-        # self.save_episode_full = rospy.Service("save_episode_full", EmptySrv, self.saveEpisodeFull)
-        # self.return_home_srv = rospy.Service("home", EmptySrv, self.return_home)
+        # self.vocab_srv = self.node.create_service(EmptySrv, "save_vocabulary", self.saveCurrentVisualDatabaseToVocabFile, callback_group=own_group())
+        # self.save_episode_full = self.node.create_service(EmptySrv, "save_episode_full", self.saveEpisodeFull, callback_group=own_group())
+        # self.return_home_srv = self.node.create_service(EmptySrv, "home", self.return_home, callback_group=own_group())
 
         # DATA PUB
         # vis_prefix = "AAA/"
         vis_prefix = ""
-        self.runtimes_pub = rospy.Publisher(vis_prefix + 'spheremap_runtimes', mrs_msgs.msg.Float64ArrayStamped, queue_size=10)
+        self.runtimes_pub = self.node.create_publisher(mrs_msgs.msg.Float64ArrayStamped, vis_prefix + 'spheremap_runtimes', 10)
 
         # VIS PUB
-        self.assumed_freespace_vis_pub = rospy.Publisher(vis_prefix + 'assumed_freespace_points', MarkerArray, queue_size=10)
-        self.spheremap_outline_pub = rospy.Publisher(vis_prefix + 'spheres', MarkerArray, queue_size=10)
-        self.spheremap_freespace_pub = rospy.Publisher(vis_prefix + 'spheremap_freespace', MarkerArray, queue_size=10)
-        self.freespace_polyhedron_pub = rospy.Publisher(vis_prefix + 'visible_freespace_poly', MarkerArray, queue_size=10)
+        self.assumed_freespace_vis_pub = self.node.create_publisher(MarkerArray, vis_prefix + 'assumed_freespace_points', 10)
+        self.spheremap_outline_pub = self.node.create_publisher(MarkerArray, vis_prefix + 'spheres', 10)
+        self.spheremap_freespace_pub = self.node.create_publisher(MarkerArray, vis_prefix + 'spheremap_freespace', 10)
+        self.freespace_polyhedron_pub = self.node.create_publisher(MarkerArray, vis_prefix + 'visible_freespace_poly', 10)
 
-        self.recent_submaps_vis_pub = rospy.Publisher(vis_prefix + 'recent_submaps_vis', MarkerArray, queue_size=10)
-        self.path_planning_vis_pub = rospy.Publisher(vis_prefix + 'path_planning_vis', MarkerArray, queue_size=10)
-        self.visual_similarity_vis_pub = rospy.Publisher(vis_prefix + 'visual_similarity_vis', MarkerArray, queue_size=10)
-        self.unsorted_vis_pub = rospy.Publisher(vis_prefix + 'unsorted_markers', MarkerArray, queue_size=10)
+        self.recent_submaps_vis_pub = self.node.create_publisher(MarkerArray, vis_prefix + 'recent_submaps_vis', 10)
+        self.path_planning_vis_pub = self.node.create_publisher(MarkerArray, vis_prefix + 'path_planning_vis', 10)
+        self.visual_similarity_vis_pub = self.node.create_publisher(MarkerArray, vis_prefix + 'visual_similarity_vis', 10)
+        self.unsorted_vis_pub = self.node.create_publisher(MarkerArray, vis_prefix + 'unsorted_markers', 10)
 
-        self.frontier_samples_pub = rospy.Publisher(vis_prefix + 'frontier_samples', PointCloud2, queue_size=10)
+        self.frontier_samples_pub = self.node.create_publisher(PointCloud2, vis_prefix + 'frontier_samples', 10)
 
-        # self.kp_pub = rospy.Publisher('tracked_features_img', Image, queue_size=1)
-        self.polygon_debug_pub = rospy.Publisher('polygon_debug', Image, queue_size=1)
-        self.polygon_enhanced_debug_pub = rospy.Publisher('polygon_enhanced_debug', Image, queue_size=1)
-        self.marker_pub = rospy.Publisher('/vo_odom', Marker, queue_size=10)
+        # self.kp_pub = self.node.create_publisher(Image, 'tracked_features_img', 1)
+        self.polygon_debug_pub = self.node.create_publisher(Image, 'polygon_debug', 1)
+        self.polygon_enhanced_debug_pub = self.node.create_publisher(Image, 'polygon_enhanced_debug', 1)
+        self.marker_pub = self.node.create_publisher(Marker, '/vo_odom', 10)
 
 
         print("T_imu(fcu)_to_cam")
@@ -147,38 +149,38 @@ class SubmapBuilderModule:
 
 
         # LOAD PARAMS
-        self.min_sphere_rad = rospy.get_param("local_mapping/min_sphere_rad")
-        self.surfel_resolution = rospy.get_param("local_mapping/surfel_resolution")
-        self.frontier_resolution = rospy.get_param("local_mapping/frontier_resolution")
-        self.protection_constant = rospy.get_param("local_mapping/protection_constant")
+        self.min_sphere_rad = get_param(self.node, "local_mapping/min_sphere_rad")
+        self.surfel_resolution = get_param(self.node, "local_mapping/surfel_resolution")
+        self.frontier_resolution = get_param(self.node, "local_mapping/frontier_resolution")
+        self.protection_constant = get_param(self.node, "local_mapping/protection_constant")
 
-        self.verbose_submap_construction = rospy.get_param("local_mapping/verbose_submap_construction")
-        self.carryover_dist = rospy.get_param("local_mapping/carryover_dist")
-        self.uav_radius = rospy.get_param("local_nav/uav_radius")
-        self.min_planning_odist = rospy.get_param("local_nav/min_planning_odist")
+        self.verbose_submap_construction = get_param(self.node, "local_mapping/verbose_submap_construction")
+        self.carryover_dist = get_param(self.node, "local_mapping/carryover_dist")
+        self.uav_radius = get_param(self.node, "local_nav/uav_radius")
+        self.min_planning_odist = get_param(self.node, "local_nav/min_planning_odist")
 
-        self.marker_scale = rospy.get_param("marker_scale")
-        self.n_sphere_samples_per_update = rospy.get_param("local_mapping/n_sphere_samples_per_update")
-        self.fragmenting_travel_dist = rospy.get_param("local_mapping/smap_fragmentation_dist")
-        self.max_sphere_update_dist = rospy.get_param("local_mapping/max_sphere_sampling_z")
+        self.marker_scale = get_param(self.node, "marker_scale")
+        self.n_sphere_samples_per_update = get_param(self.node, "local_mapping/n_sphere_samples_per_update")
+        self.fragmenting_travel_dist = get_param(self.node, "local_mapping/smap_fragmentation_dist")
+        self.max_sphere_update_dist = get_param(self.node, "local_mapping/max_sphere_sampling_z")
         self.visual_kf_addition_heading = 3.14159 /2
         self.visual_kf_addition_dist = 2
 
-        self.ofs_freespace_pts_enabled = rospy.get_param("local_mapping/ofs_pts_enabled")
-        self.ff_points_always_active = rospy.get_param("local_mapping/ofs_pts_always_active")
-        self.ff_points_ignore_tracking = rospy.get_param("local_mapping/ofs_ignore_tracking")
+        self.ofs_freespace_pts_enabled = get_param(self.node, "local_mapping/ofs_pts_enabled")
+        self.ff_points_always_active = get_param(self.node, "local_mapping/ofs_pts_always_active")
+        self.ff_points_ignore_tracking = get_param(self.node, "local_mapping/ofs_ignore_tracking")
 
 
         # LOAD ofs FREESPACE POINTS
-        self.ff_dist = rospy.get_param("local_mapping/ofs_pts_dist")
-        self.ff_min_parallax = rospy.get_param("local_mapping/ofs_min_parallax")
+        self.ff_dist = get_param(self.node, "local_mapping/ofs_pts_dist")
+        self.ff_min_parallax = get_param(self.node, "local_mapping/ofs_min_parallax")
         self.ff_pts_W = 5
         self.ff_pts_H = 5
         self.n_frontier_samples = 300
         # self.n_frontier_samples = 3000
         self.init_ofs_freespace_pts();
         self.ff_pose_buffer = []
-        self.max_ff_buffer_len = rospy.get_param("local_mapping/ofs_tracking_buffer_len")
+        self.max_ff_buffer_len = get_param(self.node, "local_mapping/ofs_tracking_buffer_len")
         
         # # #}
 
@@ -234,14 +236,9 @@ class SubmapBuilderModule:
         # # #}
 
             # Read Points from PCL msg# #{
-            pc_data = pc2.read_points(msg, field_names=("x", "y", "z"), skip_nans=True)
-            pc_list = []
-            for point in pc_data:
-                x, y, z = point
-                pc_list.append([x, y, z])
-            if len(pc_list) == 0:
+            point_cloud_array = pc2.read_points_numpy(msg, field_names=("x", "y", "z"), skip_nans=True).astype(np.float32)
+            if point_cloud_array.shape[0] == 0:
                 return
-            point_cloud_array = np.array(pc_list, dtype=np.float32)
 
             # OpenVINS outputs always some point at origin, and it is not really useful for us, breaks hull stuff
             #TODO - solve what to do with this in future
@@ -278,7 +275,7 @@ class SubmapBuilderModule:
                 else:
                     max_split_score = 100
                     split_score = 0
-                    secs_since_creation = (rospy.get_rostime() - self.spheremap.creation_time).to_sec()
+                    secs_since_creation = time_diff_sec(now(self.node), self.spheremap.creation_time)
 
                     # TIME BASED
                     # if secs_since_creation > 70:
@@ -352,7 +349,7 @@ class SubmapBuilderModule:
                 self.spheremap.memorized_transform_to_prev_map = memorized_transform_to_prev_map 
                 print("PESSS")
                 self.spheremap.T_global_to_own_origin = T_global_to_fcu
-                self.spheremap.creation_time = rospy.get_rostime()
+                self.spheremap.creation_time = now_msg(self.node)  # msg, not rclpy Time: the spheremap is deepcopied and pickled
 
                 if not pts_to_transfer is None:
                     self.spheremap.points = copy.deepcopy(pts_to_transfer)
@@ -992,7 +989,7 @@ class SubmapBuilderModule:
                 # ]
                 
                 # header = std_msgs.msg.Header()
-                # header.stamp = rospy.Time.now()
+                # header.stamp = now_msg(self.node)
                 # header.frame_id = "map"
                 
                 # # Ensure float32 and contiguous memory
@@ -1017,7 +1014,7 @@ class SubmapBuilderModule:
             # PUBLISH RUNTIMES
             runtime_msg = mrs_msgs.msg.Float64ArrayStamped()
             h = std_msgs.msg.Header()
-            h.stamp = rospy.Time.now()
+            h.stamp = now_msg(self.node)
             runtime_msg.header = h
             # runtime_msg.values = runtime_data
             runtime_msg.values = [runtime_polyhedron_update, runtime_obstacles_and_frontiers_update, runtime_old_spheres_update, runtime_new_spheres_update, runtime_connectivity_update]
@@ -1186,6 +1183,8 @@ class SubmapBuilderModule:
     def sampleFrontiersAroundSpheres(self, old_pts, old_radii, N):# # #{
         M = len(old_pts)
         print("PES")
+        if M == 0:  # no spheres near the robot yet
+            return np.zeros((0, 3))
         
         # Pick random spheres
         sphere_indices = np.random.randint(0, M, size=N)
@@ -1221,17 +1220,18 @@ class SubmapBuilderModule:
         return samples
 # # #}
 
-    def saveEpisodeFull(self, req):# # #{
+    def saveEpisodeFull(self, req=None, resp=None):# # #{
         # with ScopedLock(self.spheremap_mutex):
         print("SAVING EPISODE MEMORY CHUNK")
 
-        fpath = rospkg.RosPack().get_path('monospheres') + "/memories/last_episode.pickle"
+        fpath = package_data_dir("memories", "last_episode.pickle")
+        os.makedirs(os.path.dirname(fpath), exist_ok=True)
         self.mchunk.submaps.append(self.spheremap)
         self.mchunk.save(fpath)
         self.mchunk.submaps.pop()
 
         print("EPISODE SAVED TO " + str(fpath))
-        return EmptySrvResponse()# # #}
+        return EmptySrv.Response()# # #}
 
     def get_visited_viewpoints_global(self):# # #{
         res_pts = None
@@ -1253,8 +1253,11 @@ class SubmapBuilderModule:
 
     def save_camera_img_for_visualization(self, msg):
         # self.latest_camera_image = self.bridge.imgmsg_to_cv2(msg, "bgr8")
-        np_arr = np.frombuffer(msg.data, np.uint8)
-        self.latest_camera_image = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
+        if isinstance(msg, CompressedImage):
+            np_arr = np.frombuffer(msg.data, np.uint8)
+            self.latest_camera_image = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
+        else:
+            self.latest_camera_image = self.bridge.imgmsg_to_cv2(msg, "bgr8")
 
     # VISUALIZE
 
@@ -1425,7 +1428,7 @@ class SubmapBuilderModule:
 
             marker.id = marker_id
             marker_id += 1
-            marker.pose.position = Point(t_centroid[0], t_centroid[1], t_centroid[2])
+            marker.pose.position = Point(x=t_centroid[0], y=t_centroid[1], z=t_centroid[2])
 
             marker_array.markers.append(marker)
 
@@ -1617,7 +1620,7 @@ class SubmapBuilderModule:
                 for i in range(smap.surfel_points.shape[0]):
                     marker = Marker()
                     marker.header.frame_id = self.odom_frame  # Change this frame_id if necessary
-                    marker.header.stamp = rospy.Time.now()
+                    marker.header.stamp = now_msg(self.node)
                     marker.type = Marker.ARROW
                     marker.action = Marker.ADD
                     marker.id = marker_id
@@ -1653,7 +1656,7 @@ class SubmapBuilderModule:
                 for i in range(n_kframes):
                     marker = Marker()
                     marker.header.frame_id = self.odom_frame  # Change this frame_id if necessary
-                    marker.header.stamp = rospy.Time.now()
+                    marker.header.stamp = now_msg(self.node)
                     marker.type = Marker.ARROW
                     marker.action = Marker.ADD
                     marker.id = marker_id
@@ -1692,7 +1695,7 @@ class SubmapBuilderModule:
             for i in range(smap.points.shape[0]):
                 marker = Marker()
                 marker.header.frame_id = self.odom_frame  # Change this frame_id if necessary
-                marker.header.stamp = rospy.Time.now()
+                marker.header.stamp = now_msg(self.node)
                 marker.type = Marker.SPHERE
                 marker.action = Marker.ADD
                 marker.id = marker_id

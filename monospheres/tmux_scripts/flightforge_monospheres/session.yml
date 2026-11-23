@@ -1,0 +1,79 @@
+# MonoSpheres exploration in FlightForge (ROS 2 Jazzy, MRS UAV System).
+# Based on the mrs_open_vins_core `tmux/flightforge` session.
+# Requires the FlightForge binary: set FLIGHTFORGE_PATH to the directory containing mrs_flight_forge.sh.
+# The colcon workspace containing monospheres must be sourced in ~/.bashrc, and the package's
+# python-env venv must exist (monospheres/create_python_env.sh).
+# start.sh attaches to the session; detached_start.sh only starts it in the background.
+# do not modify these
+root: ./
+name: simulation
+socket_name: mrs
+attach: false
+tmux_options: -f /etc/ctu-mrs/tmux.conf
+# you can modify these
+startup_window: monospheres
+pre_window: export UAV_NAME=uav1; export USE_SIM_TIME="true"; export RMW_IMPLEMENTATION=rmw_zenoh_cpp;
+            export FLIGHTFORGE_PATH=${FLIGHTFORGE_PATH:-$HOME/Downloads/FlightForge_Linux_v_0_11_2};
+            [ -f ../../python-env/bin/activate ] && source ../../python-env/bin/activate
+windows:
+  - flightforge:
+      layout: tiled
+      panes:
+        - $FLIGHTFORGE_PATH/mrs_flight_forge.sh
+  - router:
+      layout: tiled
+      panes:
+        - ros2 run rmw_zenoh_cpp rmw_zenohd
+  - simulator:
+      layout: tiled
+      panes:
+        # wait for the FlightForge binary to listen (game controller ports), otherwise the bridge fails to connect
+        - 'until (exec 3<>/dev/tcp/127.0.0.1/8551) 2>/dev/null && (exec 3<>/dev/tcp/127.0.0.1/1985) 2>/dev/null; do echo "waiting for FlightForge"; sleep 2; done; sleep 5; ros2 launch mrs_uav_flightforge_simulator flightforge_simulator.launch.py custom_config:=./config/simulator.yaml'
+  - hw_api:
+      layout: tiled
+      panes:
+        - ros2 launch mrs_uav_flightforge_simulator hw_api.launch.py
+  - vio:
+      layout: tiled
+      panes:
+        - ros2 launch mrs_open_vins_core open_vins.launch.py config_path:=./config/open_vins/estimator_config.yaml
+  - vins_republisher:
+      layout: tiled
+      panes:
+        - ros2 launch mrs_vins_republisher vins_republisher.launch.py camera_pitch:=0 camera_roll:=0 camera_yaw:=0
+  - status:
+      layout: tiled
+      panes:
+        - ros2 run mrs_uav_status status.sh
+  - core:
+      layout: tiled
+      panes:
+        - ros2 launch mrs_uav_core core.launch.py platform_config:=./config/platform_config.yaml world_config:=./config/world_config.yaml custom_config:=./config/custom_config.yaml network_config:=./config/network_config.yaml
+  - takeoff:
+      layout: tiled
+      panes:
+        - ros2 launch mrs_uav_autostart automatic_start.launch.py custom_config:=./config/automatic_start.yaml
+  - commands:
+      layout: tiled
+      panes:
+        - waitForCore; ./takeoff.sh
+  - monospheres:
+      layout: tiled
+      panes:
+        - waitForTakeoff; ros2 run monospheres waitForVio.sh && ros2 launch monospheres monospheres.launch.py config:=flightforge.yaml
+  - start_maneuver:
+      layout: tiled
+      panes:
+        - waitForTakeoff; ros2 run monospheres waitForVio.sh && sleep 4 && ros2 run monospheres goforward5m.sh
+  - exploration_start:
+      layout: tiled
+      panes:
+        - waitForTakeoff; ros2 run monospheres waitForVio.sh && sleep 20 && ros2 service call /navigation/setstate_exploring std_srvs/srv/Empty
+  - change_odom_source:
+      layout: tiled
+      panes:
+        - 'waitForTakeoff; ros2 run monospheres waitForVio.sh && sleep 30 && ros2 service call /$UAV_NAME/estimation_manager/change_estimator mrs_msgs/srv/String "{value: open_vins}"'
+  - rviz:
+      layout: tiled
+      panes:
+        - ros2 launch monospheres rviz.launch.py

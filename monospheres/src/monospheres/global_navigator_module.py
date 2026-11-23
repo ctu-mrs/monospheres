@@ -2,19 +2,17 @@
 # #{ imports
 
 import copy
-import rospy
+from monospheres.ros_utils import get_param, now, now_msg, to_sec, time_diff_sec, own_group, sensor_qos, quaternion_matrix, TfListener, package_data_dir
 from std_srvs.srv import Empty as EmptySrv
-from std_srvs.srv import EmptyResponse as EmptySrvResponse
 import threading
 
 import heapq
 
-import rospkg
 
 from monospheres.common_spatial import *
 
 from sensor_msgs.msg import Image, CompressedImage, PointCloud2
-import sensor_msgs.point_cloud2 as pc2
+from sensor_msgs_py import point_cloud2 as pc2
 import mrs_msgs.msg
 import std_msgs.msg
 from scipy.spatial.transform import Rotation
@@ -40,10 +38,8 @@ import io
 import copy
 
 from scipy.spatial.transform import Rotation
-import tf
 import tf2_ros
 import tf2_geometry_msgs  # for transforming geometry_msgs
-import tf.transformations as tfs
 from geometry_msgs.msg import TransformStamped
 
 
@@ -101,6 +97,7 @@ class LocalizationParticle:# # #{
 
 class GlobalNavigatorModule:
     def __init__(self, mapper, local_navigator):# # #{
+        self.node = mapper.node
         self.multimap_matches = []
         self.match_rankings = None
         self.localization_particles = None
@@ -114,12 +111,12 @@ class GlobalNavigatorModule:
         self.tf_listener = mapper.tf_listener
 
         # VIS PUB
-        # self.path_planning_vis_pub = rospy.Publisher('path_planning_vis', MarkerArray, queue_size=10)
-        # self.unsorted_vis_pub = rospy.Publisher('unsorted_markers', MarkerArray, queue_size=10)
-        self.matching_result_vis = rospy.Publisher('map_matching_result_vis', MarkerArray, queue_size=10)
-        self.multimap_matches_vis = rospy.Publisher('multimap_matches', MarkerArray, queue_size=10)
-        self.particle_vis = rospy.Publisher('particle_vis', MarkerArray, queue_size=10)
-        self.ransac_vis = rospy.Publisher('localization_ransac_vis', MarkerArray, queue_size=10)
+        # self.path_planning_vis_pub = self.node.create_publisher(MarkerArray, 'path_planning_vis', 10)
+        # self.unsorted_vis_pub = self.node.create_publisher(MarkerArray, 'unsorted_markers', 10)
+        self.matching_result_vis = self.node.create_publisher(MarkerArray, 'map_matching_result_vis', 10)
+        self.multimap_matches_vis = self.node.create_publisher(MarkerArray, 'multimap_matches', 10)
+        self.particle_vis = self.node.create_publisher(MarkerArray, 'particle_vis', 10)
+        self.ransac_vis = self.node.create_publisher(MarkerArray, 'localization_ransac_vis', 10)
 
 
         self.marker_scale = 0.15
@@ -132,14 +129,14 @@ class GlobalNavigatorModule:
         self.max_planning_odist = 2
 
         # # PREDICTED TRAJ
-        # self.sub_predicted_trajectory = rospy.Subscriber(ptraj_topic, mrs_msgs.msg.MpcPredictionFullState, self.predicted_trajectory_callback, queue_size=10000)
+        # self.sub_predicted_trajectory = self.node.create_subscription(mrs_msgs.msg.MpcPredictionFullState, ptraj_topic, self.predicted_trajectory_callback, sensor_qos(10000), callback_group=own_group())
         # self.predicted_trajectory_pts_global = None
 
 
         # LOAD OTHER MAP MCHUNK
-        self.planning_enabled = rospy.get_param("global_nav/enabled")
-        self.testing_mchunk_filename = rospy.get_param("global_nav/testing_mchunk_filename")
-        mchunk_filepath = rospkg.RosPack().get_path('monospheres') + "/memories/" + self.testing_mchunk_filename
+        self.planning_enabled = get_param(self.node, "global_nav/enabled")
+        self.testing_mchunk_filename = get_param(self.node, "global_nav/testing_mchunk_filename")
+        mchunk_filepath = package_data_dir("memories", self.testing_mchunk_filename)
         # self.test_mchunk = CoherentSpatialMemoryChunk.load(mchunk_filepath)
 
         # PLANNING PARAMS
@@ -149,9 +146,9 @@ class GlobalNavigatorModule:
         self.global_roadmap_len = None
         self.roadmap_start_time = None
 
-        self.local_nav_start_time = rospy.get_rostime()
+        self.local_nav_start_time = now(self.node)
         self.local_reaching_dist = 3
-        self.last_traj_send_time =  rospy.get_rostime()
+        self.last_traj_send_time =  now(self.node)
         self.traj_min_duration = 10
 
         self.currently_navigating_pts = None
@@ -424,9 +421,9 @@ class GlobalNavigatorModule:
 
         marker_id = marker_array.markers[-1].id+1
 
-        line1 = getLineMarkerPts(pts1, 2, [0, 0, 1, 1], self.mapper.odom_frame, 0, ns='lines')
-        line2 = getLineMarkerPts(pts2, 1.5, [1, 1, 0, 1], self.mapper.odom_frame, 1, ns='lines')
-        line3 = getLineMarkerPts(pts3, 2, [0, 0, 1, 1], self.mapper.odom_frame, 2, ns='lines')
+        line1 = getLineMarkerPts(pts1, 2, [0, 0, 1, 1], self.mapper.odom_frame, 0, ns='lines', stamp=now_msg(self.node))
+        line2 = getLineMarkerPts(pts2, 1.5, [1, 1, 0, 1], self.mapper.odom_frame, 1, ns='lines', stamp=now_msg(self.node))
+        line3 = getLineMarkerPts(pts3, 2, [0, 0, 1, 1], self.mapper.odom_frame, 2, ns='lines', stamp=now_msg(self.node))
         marker_array.markers.append(line1)
         marker_array.markers.append(line2)
         marker_array.markers.append(line3)
@@ -530,7 +527,7 @@ class GlobalNavigatorModule:
                 # print("SCORE: " + str(score))
                 # print(pos1)
                 # print(pos2)
-                line_marker = getLineMarker(pos1, pos2, score, rgb, self.mapper.odom_frame, marker_id)
+                line_marker = getLineMarker(pos1, pos2, score, rgb, self.mapper.odom_frame, marker_id, stamp=now_msg(self.node))
                 # line_marker.ns = 'lines'
                 marker_id += 1
                 marker_array.markers.append(line_marker)

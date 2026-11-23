@@ -7,34 +7,79 @@ Videos - [https://youtu.be/hxYtRvwQrKc](https://youtu.be/hxYtRvwQrKc)
 
 The accompanying paper "[MonoSpheres: Large-Scale Monocular SLAM-Based UAV Exploration Through Perception-Coupled Mapping and Planning](https://ieeexplore.ieee.org/document/11517436)" has been accepted to Robotics and Automation Letters and is available as open access. Please cite this publication if you use our work in your research.
 
-## Experiment Videos
-Videos from 2 real-world runs using MonoSpheres and runs in the simulated indoor and outdoor environments using both Monospheres and the baseline grid-based mapping and exploration method are available in experiment_videos.mp4. 
+This version runs on **ROS 2 Jazzy** with the **MRS UAV System** and the **FlightForge** simulator.
+The original ROS 1 (Noetic + Gazebo) version used for the paper is preserved under the git tag
+[`ros1`](../../tree/ros1).
 
-## Running the MonoSpheres Examples
-This directory containins code for the Monospheres mapping and exploration pipeline, along with a custom version of the OpenVINS package modified for compatibility with the MRS system.
-To run the MonoSpheres method example, run `monospheres/tmux_scripts/fireworld_monospheres/tmux.sh`. To run the OctoMap mapper and random explorer approach used as baseline in the paper, run `monospheres/tmux_scripts/fireworld_monospheres/tmux.sh`. 
-The parameters used for all the simulation experiments are in the config/mrs_sim.yaml file with comments explaining their purpose.  
+## Installation
 
-To run these scripts, it is neccessary to first install the MRS sytem and build the packages in this repository. Please follow these instructions for installation:
+Tested on Ubuntu 24.04.
 
-1) Install ROS and the MRS UAV system as per the instructions at https://ctu-mrs.github.io/docs/installation/ either with a native installation or using Apptainer.
-2) Create a ROS workspace (if it was not created by the MRS system installation already), add the packages contained in this repository (both the`monospheres/` and `dependecies/` folders) into your workspace's `src/` folder, build the workspace using `catkin_build` and source the workspace by running `source your_workspace_path/devel/setup.bash`
-3) Update pip by running `python3 -m pip install --upgrade pip`. Without this, some python packages in the following step might not be found (especially open3d==0.18.0)
-4) Create a python virtual environment with the required python packages for the monospheres package using the `./create_python_env.sh` script in the monospheres package.
-5) Run `monospheres/tmux_scripts/fireworld_monospheres/tmux.sh`. This will launch a tmux session using the tmux config of the MRS system. If you want to use your own config or the default tmux keybindings, you can delete the line `tmux_options: -f /etc/ctu-mrs/tmux.conf` in `session.yaml`. Otherwise, you will be able to navigate the session using the MRS system tmux keybinds available at https://github.com/ctu-mrs/mrs_cheatsheet?tab=readme-ov-file ). You can close the session using `Ctrl+a, k, enter`
+1. **ROS 2 Jazzy and the MRS UAV System.** Follow https://ctu-mrs.github.io/docs/installation/,
+   then install the system with the FlightForge bridge, OpenVINS and the zenoh middleware:
+   ```bash
+   sudo apt install ros-jazzy-mrs-uav-system-full ros-jazzy-mrs-uav-flightforge-simulator \
+                    ros-jazzy-mrs-open-vins-core ros-jazzy-rmw-zenoh-cpp
+   ```
+2. **FlightForge.** Download the FlightForge Linux binary (tested with v0.11.2) and unpack it.
+   The session expects it in `~/Downloads/FlightForge_Linux_v_0_11_2`; for any other location,
+   export `FLIGHTFORGE_PATH=/path/to/the/directory/with/mrs_flight_forge.sh` (e.g. in `~/.bashrc`).
+3. **Workspace.** Clone this repository anywhere and symlink it into a colcon workspace:
+   ```bash
+   git clone https://github.com/ctu-mrs/monospheres.git ~/git/monospheres
+   mkdir -p ~/monospheres_ws/src && cd ~/monospheres_ws
+   ln -s ~/git/monospheres/monospheres src/monospheres
+   colcon init
+   colcon build --symlink-install
+   echo "source ~/monospheres_ws/install/setup.bash" >> ~/.bashrc
+   source ~/.bashrc
+   ```
+   `colcon init` is needed because the MRS system installs a `colcon` wrapper that only builds in
+   initialized workspaces.
+4. **Python environment.** The pip-only dependencies (open3d, trimesh, embreex, numba, ...) live in a
+   venv inside the package, created with access to the system ROS 2 Python packages:
+   ```bash
+   python3 -m pip install --upgrade pip
+   ~/git/monospheres/monospheres/create_python_env.sh
+   ```
+   The tmux session activates this venv automatically.
 
-After launching the tmux session, you should see a Gazebo simulation window pop up and a drone should be spawned. Then, after the automatic takeoff, an RVIZ window should open, showing the OpenVINS debug image and the 3D map constructed by MonoSpheres. The `start_maneuver` tab will send a command for the UAV to go 5m forward after takeoff and start the automatic exploration. You can also control the UAV manually by moving to the `status` tmux tab, pressing `Ctrl+R` to switch to the remote mode and the use w,a,s,d,q,e,r,f.  (see https://ctu-mrs.github.io/docs/features/status_tui/ for details). 
+## Running the FlightForge example
 
+```bash
+~/git/monospheres/monospheres/tmux_scripts/flightforge_monospheres/start.sh
+```
 
+This starts a tmux session (MRS tmux config and keybindings, see
+https://github.com/ctu-mrs/mrs_cheatsheet) that launches FlightForge, the MRS UAV core, OpenVINS,
+MonoSpheres and RViz. After the automatic takeoff (3 m), the session waits for OpenVINS to
+initialize, flies 4 m forward, switches the UAV's state estimate to the OpenVINS odometry and starts
+the exploration. Close the session with `Ctrl+a, k, Enter` (or run `kill.sh`).
+`detached_start.sh` starts the same session in the background without attaching to it.
+
+Session configuration lives in `monospheres/tmux_scripts/flightforge_monospheres/`:
+- `config/simulator.yaml` — FlightForge world and UAV spawn position/heading
+- `config/custom_config.yaml` — MRS overrides (takeoff height)
+- `config/open_vins/` — OpenVINS estimator and camera/IMU calibration for the FlightForge camera
+
+MonoSpheres parameters are in `monospheres/config/flightforge.yaml` (shared with the mapping and
+planning modules, with comments explaining their purpose). The launch file is
+`ros2 launch monospheres monospheres.launch.py` (args `config`, `custom_config`, `use_sim_time`).
 
 ## Troubleshooting
-- Drone is not spawning - This can be a problem with the jinja2 python package. The code is tested to work with the 2.1.3 version, which can be installed by running `pip install jinja2==2.1.3`. If this does not help, please also update the markupsafe package to the following version: `pip install markupsafe==2.1.3`.
-- Drone is spawned but is not taking off - This can happen if a tmux session was not closed properly and a px4 daemon for the hardware API is not destroyed. This can be fixed by closing the session and running `killall px4`.
-- Drone has taken off, but nothing is happening:
-  - First check if OpenVINS has been initialized. You can check this first by looking at the Rviz `trackhist` image topic where the red text "init" should change into "cam:0" and green SLAM points should appear in the visualization. Also, the messages in the `VINS` tab should change from orange initialization messages into white ones. This might happen if your computer does not have a strong graphics card and if the framerate is low relative to gazebo's real-time-factor (around 30FPS should be available for OpenVINS). This can be solved by slowing down the simulation. In the `session.yaml`, under the `sim_slowdown` tab, uncomment the second line and comment the first one (or call the slowdown manually by `rosrun dynamic_reconfigure dynparam set gazebo max_update_rate 50` once gazebo starts). This should reduce the real_time_factor of gazebo.
-  - If OpenVINS is initialized, then check the `navigation` and `exploration_start` tabs. In `navigation`, the monospheres core node should be running and printing runtime statistics. If the map is being built, but the UAV is not exploring, then try running the service in the `exploration_start` tab again to switch the UAV to automatic exploration mode. If you see the map is being built but the UAV is still not exploring, try moving the UAV to another position manually (on different machines, due to using system-time sleeps' the mapping might start after the forward motion is complete, but it is intended to start before the motion, so that the UAV can start exploration in free space). 
+- **The UAV took off but nothing happens.** First check that OpenVINS initialized: the `vio` tab
+  should stop printing initialization messages and `ros2 topic echo /uav1/open_vins/odomimu` should
+  publish. The post-takeoff steps wait for this and print `!!! VIO NOT INITIALIZED !!!` on timeout.
+  OpenVINS initializes from a static start and needs visible texture/structure in front of the
+  camera; a spawn facing a flat empty plane often fails. Change the spawn in `config/simulator.yaml`.
+- **Then check the `monospheres` tab.** The node prints runtime statistics for map building and
+  planning. If the map is built but the UAV does not explore, rerun the service in the
+  `exploration_start` tab.
+- **Everything is slow / long pauses before moving.** Check the `simulator` tab for the actual real-time
+  factor (`actual RTF`). FlightForge renders on the GPU; at a low RTF all sim-time timeouts in the
+  planner take proportionally longer in wall time.
+- **Two simulations / clocks interfere.** Other ROS 2 processes on the same `ROS_DOMAIN_ID` (e.g. set in
+  `~/.bashrc`) also publish `/clock` and `/tf`. Stop them or use a different domain ID.
 
 ## License
 The MonoSpheres code is released under the [MIT License](LICENSE).
-Third-party code in `dependencies/` keeps its original license
-(OpenVINS: GPL-3.0, vins_republish: BSD-3-Clause).

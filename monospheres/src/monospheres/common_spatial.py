@@ -5,8 +5,7 @@ import numpy as np
 from scipy.spatial import KDTree
 import scipy
 import pickle
-import rospy
-import tf.transformations as tfs
+from monospheres.ros_utils import quaternion_matrix
 from scipy.spatial.transform import Rotation as R
 import open3d 
 import open3d.t.pipelines.registration as treg
@@ -116,9 +115,9 @@ def getVisiblePoints(pts, normals, max_angle, max_dist, w, h, K, verbose=False, 
 
 
 def lookupTransformAsMatrix(frame1, frame2, tf_listener):# # #{
-    (trans, rotation) = tf_listener.lookupTransform(frame1, frame2, rospy.Time(0)) #Time0 = latest
+    (trans, rotation) = tf_listener.lookupTransform(frame1, frame2) # latest
 
-    rotation_matrix = tfs.quaternion_matrix(rotation)
+    rotation_matrix = quaternion_matrix(rotation)
     res = np.eye(4)
     res[:3, :3] = rotation_matrix[:3,:3]
     res[:3, 3] = trans
@@ -371,7 +370,10 @@ class SphereMap:
 
             # CHECK IF NOT TOO CLOSE TO SURFELS
             # surf_min_dist = filtering_radius * 2
-            surf_dist = np.min(np.linalg.norm(self.surfel_points - self.frontier_points[i,:], axis=1))
+            if self.surfel_points is None:  # no obstacle surfels yet
+                surf_dist = np.inf
+            else:
+                surf_dist = np.min(np.linalg.norm(self.surfel_points - self.frontier_points[i,:], axis=1))
             if surf_dist < filtering_radius: #or surf_dist > self.min_radius * 5:
                 keep_frontiers_mask[i] = False
                 continue
@@ -1051,10 +1053,11 @@ def getConnectedSubmapsWithTransforms(mchunk, start_idx, max_submaps, allow_zero
     return smap_idxs, transforms
 # # #}
 
-def getLineMarker(pos, endpos, thickness, rgba, frame_id, marker_id):# # #{
+def getLineMarker(pos, endpos, thickness, rgba, frame_id, marker_id, stamp=None):# # #{
     marker = Marker()
     marker.header.frame_id = frame_id
-    marker.header.stamp = rospy.Time.now()
+    if stamp is not None:  # stamp 0 = "use latest TF" in RViz
+        marker.header.stamp = stamp
     marker.type = Marker.LINE_LIST
     marker.action = Marker.ADD
     marker.id = marker_id
@@ -1071,10 +1074,11 @@ def getLineMarker(pos, endpos, thickness, rgba, frame_id, marker_id):# # #{
     marker.points = points_msg
     return marker# # #}
 
-def getLineMarkerPts(pts, thickness, rgba, frame_id, marker_id, ns='todo'):# # #{
+def getLineMarkerPts(pts, thickness, rgba, frame_id, marker_id, ns='todo', stamp=None):# # #{
     marker = Marker()
     marker.header.frame_id = frame_id
-    marker.header.stamp = rospy.Time.now()
+    if stamp is not None:  # stamp 0 = "use latest TF" in RViz
+        marker.header.stamp = stamp
     marker.type = Marker.LINE_LIST
     marker.action = Marker.ADD
     marker.id = marker_id
